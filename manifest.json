@@ -1,0 +1,9 @@
+{
+  "id": "in-note-graph",
+  "name": "In-Note Graph",
+  "description": "A plugin to add a visual editor of graphs and automatons.",
+  "version": "0.1.0",
+  "author": "ShakedKod",
+  "isDesktopOnly": true,
+  "minAppVersion": "0.10.8"
+}
