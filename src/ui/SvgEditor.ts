@@ -3,7 +3,7 @@ import { finishRenderMath, renderMath } from "obsidian";
 export interface Position { x: number; y: number; }
 export interface GraphNode { id: string; position: Position; label: string; isAccepting?: boolean; isStart?: boolean; color?: string; }
 export interface GraphWaypoint { id: string; x: number; y: number; type: 'linear' | 'bezier'; }
-export interface GraphEdge { id: string; source: string; target: string; label?: string; waypoints?: GraphWaypoint[]; isBendable?: boolean; color?: string; }
+export interface GraphEdge { id: string; source: string; target: string; label?: string; waypoints?: GraphWaypoint[]; isBendable?: boolean; color?: string; type?: 'arrow' | 'none'; }
 export interface GraphTheme { background?: string; nodeFill?: string; nodeStroke?: string; text?: string; edgeStroke?: string; startArrow?: string; acceptCircle?: string; }
 export interface GraphViewport { height: number; viewBox: { x: number, y: number, w: number, h: number }; }
 
@@ -49,69 +49,28 @@ export class SvgGraphEditor {
     // New Linking States
     private isLinkingMode: boolean = false;
     private isDeletingMode: boolean = false;
-    private isEdgeEditMode: boolean = false;
-    private isTogglingStartMode: boolean = false;
-    private isTogglingAcceptMode: boolean = false;
     private linkSourceNode: string | null = null;
 
     private onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void;
+    private onManualSave: () => void;
 
-    constructor(container: HTMLElement, initialNodes: GraphNode[], initialEdges: GraphEdge[], initialViewport: GraphViewport | undefined, userTheme: GraphTheme | undefined, onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void) {
+    constructor(container: HTMLElement, initialNodes: GraphNode[], initialEdges: GraphEdge[], initialViewport: GraphViewport | undefined, userTheme: GraphTheme | undefined, onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void, onManualSave: () => void) {
         this.container = container;
-        this.container.style.position = "relative";
+        this.container.addClass("automaton-graph-container");
 
         let initHeight = initialViewport && initialViewport.height ? initialViewport.height : 300;
-        if (initHeight < 100) initHeight = 100;
-        this.container.style.height = `${initHeight}px`;
-
-        this.container.style.overflow = "hidden"; // Prevent context menu from clipping
-        this.container.style.direction = "ltr";
-        // Prevent the browser from highlighting the graph like text
-        this.container.style.userSelect = "none";
-        this.container.style.webkitUserSelect = "none";
-
-        const style = document.createElement("style");
-        style.textContent = `
-            @media print {
-                .automaton-ui-element { display: none !important; }
-                .obsidian-automaton-resizer { display: none !important; }
-            }
-        `;
-        this.container.appendChild(style);
+        this.container.style.height = `${Math.max(100, initHeight)}px`;
 
         this.nodes = initialNodes;
         this.edges = initialEdges;
         this.onSave = onSave;
+        this.onManualSave = onManualSave;
         this.theme = { ...DEFAULT_THEME, ...userTheme };
 
         this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        this.svg.setAttribute("width", "100%");
-        this.svg.setAttribute("height", "100%");
-        this.svg.style.border = "1px solid var(--background-modifier-border)";
-        this.svg.style.borderRadius = "8px";
-        this.svg.style.backgroundColor = "transparent";
+        this.svg.classList.add("automaton-svg-canvas");
 
         this.container.appendChild(this.svg);
-
-        const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-
-        // Smart Arrow: context-stroke forces the arrow to copy the line's color!
-        const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
-        marker.setAttribute("id", "smart-arrow");
-        marker.setAttribute("viewBox", "0 -5 10 10");
-        marker.setAttribute("refX", "10");
-        marker.setAttribute("refY", "0");
-        marker.setAttribute("markerWidth", "6");
-        marker.setAttribute("markerHeight", "6");
-        marker.setAttribute("orient", "auto");
-
-        const arrowPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        arrowPath.setAttribute("d", "M 0,-5 L 10,0 L 0,5 Z");
-        arrowPath.setAttribute("fill", "context-stroke"); // Magic dynamic coloring
-
-        marker.appendChild(arrowPath);
-        defs.appendChild(marker);
-        this.svg.appendChild(defs);
 
         if (initialViewport && initialViewport.viewBox) {
             this.viewBox = { ...initialViewport.viewBox };
@@ -146,14 +105,11 @@ export class SvgGraphEditor {
 
         if (forceFileWrite) {
             this.onSave(this.nodes, this.edges, this.theme, currentViewport);
-            this.modeIndicator.style.border = "none";
-            this.modeIndicator.textContent = "";
             this.modeIndicator.style.display = "none";
         }
         else {
             this.modeIndicator.style.display = "block";
-            this.modeIndicator.style.border = "2px solid #ff9800";
-            this.modeIndicator.textContent = "Unsaved Changes (Ctrl+S to save)";
+            this.modeIndicator.style.opacity = "0.8";
         }
     }
 
@@ -167,14 +123,6 @@ export class SvgGraphEditor {
 
     private buildResizer() {
         const resizer = document.createElement("div");
-        resizer.style.position = "absolute";
-        resizer.style.bottom = "0";
-        resizer.style.left = "0";
-        resizer.style.width = "100%";
-        resizer.style.height = "10px";
-        resizer.style.cursor = "ns-resize"; // Shows the Up/Down arrow cursor
-        resizer.style.zIndex = "1000";
-        resizer.style.transition = "background-color 0.2s";
         resizer.className = "obsidian-automaton-resizer";
 
         // Subtle visual feedback when hovering
@@ -228,55 +176,33 @@ export class SvgGraphEditor {
     private showDotImportModal() {
         // Create an overlay background
         const overlay = document.createElement("div");
-        overlay.style.position = "absolute";
-        overlay.style.top = "0";
-        overlay.style.left = "0";
-        overlay.style.width = "100%";
-        overlay.style.height = "100%";
-        overlay.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
-        overlay.style.display = "flex";
-        overlay.style.justifyContent = "center";
-        overlay.style.alignItems = "center";
-        overlay.style.zIndex = "1000";
-        overlay.style.borderRadius = "8px";
+        overlay.addClass("automaton-modal-overlay");
 
         // Create the modal box
         const modal = document.createElement("div");
-        modal.style.backgroundColor = "var(--background-primary)";
-        modal.style.padding = "20px";
-        modal.style.borderRadius = "8px";
-        modal.style.border = "1px solid var(--background-modifier-border)";
-        modal.style.display = "flex";
-        modal.style.flexDirection = "column";
-        modal.style.gap = "10px";
-        modal.style.width = "80%";
-        modal.style.maxWidth = "400px";
+        modal.addClass("automaton-modal-box");
 
         const title = document.createElement("h3");
         title.textContent = "Import Graphviz (DOT)";
-        title.style.margin = "0";
+        title.addClass("automaton-modal-title");
 
         const textarea = document.createElement("textarea");
         textarea.rows = 8;
         textarea.placeholder = 'digraph G {\n  start -> q0;\n  q0 -> q1 [label="0, 1"];\n  q1 [shape=doublecircle];\n}';
-        textarea.style.width = "100%";
-        textarea.style.resize = "vertical";
-        textarea.style.backgroundColor = "var(--background-secondary)";
-        textarea.style.color = "var(--text-normal)";
+        textarea.addClass("automaton-modal-textarea");
 
         const buttonRow = document.createElement("div");
-        buttonRow.style.display = "flex";
-        buttonRow.style.justifyContent = "flex-end";
-        buttonRow.style.gap = "8px";
+        buttonRow.addClass("automaton-modal-button-row");
 
         const cancelBtn = document.createElement("button");
         cancelBtn.textContent = "Cancel";
+        cancelBtn.addClass("automaton-modal-button");
         cancelBtn.onclick = () => overlay.remove();
 
         const convertBtn = document.createElement("button");
         convertBtn.textContent = "Convert";
-        convertBtn.style.backgroundColor = "var(--interactive-accent)";
-        convertBtn.style.color = "var(--text-on-accent)";
+        convertBtn.addClass("automaton-modal-button");
+        convertBtn.addClass("automaton-modal-button-primary");
         convertBtn.onclick = () => {
             if (textarea.value.trim()) {
                 this.importFromDot(textarea.value);
@@ -300,89 +226,66 @@ export class SvgGraphEditor {
     private setMode(mode: "none" | "link" | "delete") {
         this.isLinkingMode = mode === "link";
         this.isDeletingMode = mode === "delete";
-
-        this.isTogglingStartMode = false;
-        this.isTogglingAcceptMode = false;
         this.linkSourceNode = null;
 
         if (mode === "none") this.svg.style.cursor = "grab";
         else if (mode === "link") this.svg.style.cursor = "crosshair";
         else if (mode === "delete") this.svg.style.cursor = "not-allowed";
-
-        if (mode === "none") {
-            this.modeIndicator.style.display = "none";
-        } else {
-            this.modeIndicator.style.display = "block";
-            this.modeIndicator.textContent = `Mode: ${mode.toUpperCase()} (Press ESC to cancel)`;
-        }
     }
 
     // --- UI: MODE INDICATOR ---
     private buildModeIndicator() {
         this.modeIndicator = document.createElement("div");
-        this.modeIndicator.style.position = "absolute";
-        this.modeIndicator.style.top = "10px";
-        this.modeIndicator.style.right = "10px";
-        this.modeIndicator.style.padding = "4px 8px";
-        this.modeIndicator.style.backgroundColor = "var(--interactive-accent)";
-        this.modeIndicator.style.color = "var(--text-on-accent)";
-        this.modeIndicator.style.borderRadius = "4px";
-        this.modeIndicator.style.fontSize = "12px";
-        this.modeIndicator.style.fontWeight = "bold";
-        this.modeIndicator.style.display = "none";
-        this.modeIndicator.style.pointerEvents = "none"; // Clicks pass through
-        this.modeIndicator.className = "automaton-ui-element";
+        this.modeIndicator.className = "automaton-unsaved-dot";
         this.container.appendChild(this.modeIndicator);
     }
 
     // --- UI: CONTEXT MENU ---
     private buildContextMenu() {
         this.contextMenu = document.createElement("div");
-        this.contextMenu.style.position = "absolute";
-        this.contextMenu.style.display = "none";
-        this.contextMenu.style.flexDirection = "column";
-        this.contextMenu.style.backgroundColor = "var(--background-primary)";
-        this.contextMenu.style.border = "1px solid var(--background-modifier-border)";
-        this.contextMenu.style.borderRadius = "6px";
-        this.contextMenu.style.padding = "4px";
-        this.contextMenu.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
-        this.contextMenu.style.zIndex = "1000";
-        this.contextMenu.style.minWidth = "120px";
-        this.container.appendChild(this.contextMenu);
+        this.contextMenu.addClass("automaton-context-menu");
+        document.body.appendChild(this.contextMenu);
 
         // Hide menu if user clicks anywhere else
         document.addEventListener("mousedown", (e) => {
-            if (!this.contextMenu.contains(e.target as HTMLElement)) {
+            // If the click is NOT inside the context menu, hide it
+            if (this.contextMenu && !this.contextMenu.contains(e.target as HTMLElement)) {
                 this.contextMenu.style.display = "none";
             }
         });
 
         // Cancel modes with Escape key
         document.addEventListener("keydown", (e) => {
-            if (e.key === "Escape") this.setMode("none");
+            if (e.key === "Escape") {
+                this.isLinkingMode = false;
+                this.isDeletingMode = false;
+                this.linkSourceNode = null;
+                this.svg.style.cursor = "grab";
+                this.buildDOM(); // Refresh to clear any "Link" highlights
+                this.updateUI();
+            }
         });
+    }
+
+    private updateUI() {
+        if (this.isLinkingMode) {
+            this.svg.style.cursor = "crosshair";
+        }
+        else if (this.isDeletingMode) {
+            this.svg.style.cursor = "not-allowed";
+        }
+        else {
+            this.svg.style.cursor = "grab";
+        }
     }
 
     private createLabelContent(text: string, color: string): HTMLElement {
         const container = document.createElement("div");
-
-        container.style.position = "absolute";
-        container.style.transform = "translate(-50%, -50%)";
-        container.style.display = "flex";
-        container.style.justifyContent = "center";
-        container.style.alignItems = "center";
-        container.style.pointerEvents = "none";
+        container.addClass("automaton-label-container");
 
         const pill = document.createElement("div");
-        pill.style.display = "inline-flex";
-        pill.style.alignItems = "center";
-        pill.style.backgroundColor = "transparent";
-        pill.style.padding = "2px 6px";
-        pill.style.borderRadius = "4px";
-        pill.style.color = color;
-        pill.style.fontSize = "14px";
-        pill.style.fontWeight = "bold";
-        pill.style.whiteSpace = "nowrap"; // Prevents text from breaking into multiple lines
+        pill.addClass("automaton-label-pill");
+        pill.style.color = color; // Keep color dynamic based on theme
 
         const parts = text.split(/(\$.*?\$)/g);
 
@@ -399,7 +302,7 @@ export class SvgGraphEditor {
             } else if (part.length > 0) {
                 const span = document.createElement("span");
                 span.innerText = part;
-                span.style.margin = "0 2px";
+                span.addClass("automaton-label-pill-text");
                 pill.appendChild(span);
             }
         });
@@ -486,9 +389,11 @@ export class SvgGraphEditor {
             const startX = sx + Math.cos(startAngle) * radius;
             const startY = sy + Math.sin(startAngle) * radius;
 
-            const endAngle = Math.atan2(ty - lastWp.y, tx - lastWp.x);
-            const endX = tx - Math.cos(endAngle) * radius;
-            const endY = ty - Math.sin(endAngle) * radius;
+            const dx = tx - lastWp.x;
+            const dy = ty - lastWp.y;
+            const angle = Math.atan2(dy, dx);
+            const endX = tx - Math.cos(angle) * (radius + 2);
+            const endY = ty - Math.sin(angle) * (radius + 2);
 
             let path = `M ${startX} ${startY}`;
 
@@ -614,21 +519,31 @@ export class SvgGraphEditor {
 
     // --- DOM CREATION (Runs when adding nodes) ---
     private buildDOM() {
+        const markerId = `arrow-${Math.random().toString(36).substring(2, 9)}`;
+
         this.svg.innerHTML = "";
         this.nodeElements.clear();
         this.edgeElements.clear();
 
         // 1. Arrow Marker
         const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-        defs.innerHTML = `
-            <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="${this.theme.edgeStroke}" />
-            </marker>
+        const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
 
-            <marker id="double-arrow" markerWidth="20" markerHeight="10" refX="19" refY="5" orient="auto" markerUnits="userSpaceOnUse">
-                <path d="M 0 0 L 10 5 L 0 10 z M 9 0 L 19 5 L 9 10 z" fill="${this.theme.edgeStroke}" />
-            </marker>
-        `;
+        marker.setAttribute("id", markerId); 
+        marker.setAttribute("viewBox", "0 0 10 10");
+        marker.setAttribute("refX", "10"); 
+        marker.setAttribute("refY", "5");
+        marker.setAttribute("markerWidth", "5");
+        marker.setAttribute("markerHeight", "5");
+        marker.setAttribute("orient", "auto");
+
+        const arrowPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        // Points to the right (tip at x=10)
+        arrowPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+        arrowPath.setAttribute("fill", this.theme.edgeStroke || "var(--text-muted)");
+
+        marker.appendChild(arrowPath);
+        defs.appendChild(marker);
         this.svg.appendChild(defs);
 
         // 2. Build Edges (Now as Groups with Labels!)
@@ -647,11 +562,15 @@ export class SvgGraphEditor {
             hitbox.style.cursor = "grab";
 
             const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("stroke", edgeColor);
             path.setAttribute("stroke-width", "2");
             path.setAttribute("fill", "none");
-            path.setAttribute("stroke", edgeColor);
-            path.setAttribute("marker-end", "url(#smart-arrow)"); // Attach our new smart arrow
-            path.style.pointerEvents = "none";
+            path.setAttribute("stroke-linecap", "butt");
+
+            // --- THE LOGIC: Only show arrow if type is 'arrow' ---
+            if (edge.type === 'arrow') {
+                path.setAttribute("marker-end", `url(#${markerId})`);
+            }
 
             const foreignObj = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
             foreignObj.setAttribute("width", "1");
@@ -811,17 +730,14 @@ export class SvgGraphEditor {
             const addMenuItem = (text: string, onClick: () => void, color = "var(--text-normal)") => {
                 const btn = document.createElement("button");
                 btn.textContent = text;
-                btn.style.width = "100%";
-                btn.style.textAlign = "left";
-                btn.style.background = "transparent";
-                btn.style.border = "none";
-                btn.style.cursor = "pointer";
-                btn.style.padding = "6px 12px";
-                btn.style.borderRadius = "4px";
-                btn.style.color = color;
-
-                btn.onmouseenter = () => btn.style.background = "var(--background-secondary)";
-                btn.onmouseleave = () => btn.style.background = "transparent";
+                btn.addClass("automaton-context-menu-item");
+                if (color === "var(--text-error)") {
+                    btn.addClass("automaton-context-menu-item-error");
+                } else if (color === "var(--interactive-accent)") {
+                    btn.addClass("automaton-context-menu-accent");
+                } else if (color !== "var(--text-normal)") {
+                    btn.style.color = color;
+                }
 
                 btn.onclick = (e) => {
                     e.stopPropagation();
@@ -833,28 +749,16 @@ export class SvgGraphEditor {
 
             const addColorPicker = (label: string, currentColor: string | undefined, onChange: (newColor: string) => void) => {
                 const wrapper = document.createElement("div");
-                wrapper.style.display = "flex";
-                wrapper.style.justifyContent = "space-between";
-                wrapper.style.alignItems = "center";
-                wrapper.style.padding = "6px 12px";
-                wrapper.style.cursor = "pointer";
-                wrapper.style.color = "var(--text-normal)";
-                wrapper.onmouseenter = () => wrapper.style.background = "var(--background-secondary)";
-                wrapper.onmouseleave = () => wrapper.style.background = "transparent";
+                wrapper.addClass("automaton-color-picker-wrapper");
 
                 const textSpan = document.createElement("span");
                 textSpan.textContent = label;
 
                 const input = document.createElement("input");
                 input.type = "color";
+                input.addClass("automaton-color-picker-input");
                 // Default to black/white depending on theme so the picker doesn't look empty
                 input.value = currentColor || (document.body.classList.contains('theme-dark') ? "#ffffff" : "#000000");
-                input.style.border = "none";
-                input.style.width = "24px";
-                input.style.height = "24px";
-                input.style.padding = "0";
-                input.style.background = "none";
-                input.style.cursor = "pointer";
 
                 input.oninput = (e) => {
                     const color = (e.target as HTMLInputElement).value;
@@ -887,8 +791,7 @@ export class SvgGraphEditor {
                     });
 
                     const divider = document.createElement("div");
-                    divider.style.borderBottom = "1px solid var(--background-modifier-border)";
-                    divider.style.margin = "4px 0";
+                    divider.addClass("automaton-context-menu-divider");
                     this.contextMenu.appendChild(divider);
                 }
             }
@@ -941,12 +844,18 @@ export class SvgGraphEditor {
                             clickedEdge.color = newColor;
                             this.buildDOM(); this.updatePositions(); this.triggerSave();
                         });
+                        const arrowText = clickedEdge.type === 'arrow' ? "➖ Remove Arrow" : "➡️ Add Arrow";
+                        addMenuItem(arrowText, () => {
+                            clickedEdge.type = clickedEdge.type === 'arrow' ? undefined : 'arrow';
+                            this.buildDOM();
+                            this.updatePositions();
+                            this.triggerSave();
+                        });
                     }
                 }
 
                 const divider = document.createElement("div");
-                divider.style.borderBottom = "1px solid var(--background-modifier-border)";
-                divider.style.margin = "4px 0";
+                divider.addClass("automaton-context-menu-divider");
                 this.contextMenu.appendChild(divider);
             }
 
@@ -962,30 +871,37 @@ export class SvgGraphEditor {
             addMenuItem("🔗 Link Mode", () => this.setMode("link"));
             addMenuItem("💾 Save Changes", () => {
                 this.triggerSave(true);
+                this.onManualSave();
                 this.contextMenu.style.display = "none";
             }, "var(--interactive-accent)");
             addMenuItem("⚙️ Import DOT", () => { this.setMode("none"); this.showDotImportModal(); });
             addMenuItem("🗑️ Delete Mode", () => this.setMode("delete"), "var(--text-error)");
 
             // Position and show the menu
-            this.contextMenu.style.visibility = "hidden"; // Hide it while we measure it
             this.contextMenu.style.display = "flex";
+            this.contextMenu.style.visibility = "hidden";
 
-            const rect = this.container.getBoundingClientRect();
             const menuRect = this.contextMenu.getBoundingClientRect();
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
 
-            let x = evt.clientX - rect.left;
-            let y = evt.clientY - rect.top;
+            let x = evt.clientX;
+            let y = evt.clientY;
 
-            // If the menu hits the right wall, flip it to open leftward!
-            if (x + menuRect.width > rect.width) x -= menuRect.width;
+            // 2. Flip horizontally if it hits the right edge of the SCREEN
+            if (x + menuRect.width > viewportWidth) {
+                x = x - menuRect.width;
+            }
 
-            // If the menu hits the bottom wall, flip it to open upward!
-            if (y + menuRect.height > rect.height) y -= menuRect.height;
+            // 3. Flip vertically if it hits the bottom edge of the SCREEN
+            if (y + menuRect.height > viewportHeight) {
+                y = y - menuRect.height;
+            }
 
+            // 4. Apply absolute screen coordinates
             this.contextMenu.style.left = `${x}px`;
             this.contextMenu.style.top = `${y}px`;
-            this.contextMenu.style.visibility = "visible"; // Show it safely
+            this.contextMenu.style.visibility = "visible";
         });
 
         this.svg.addEventListener("wheel", (evt) => {
@@ -1054,20 +970,11 @@ export class SvgGraphEditor {
             input.type = "text";
             input.value = currentText;
             input.placeholder = "Use $...$ for MathJax";
+            input.addClass("automaton-inline-editor");
 
-            // Style it to look native to Obsidian
-            input.style.position = "absolute";
+            // Style position and offset
             input.style.left = `${evt.offsetX}px`;
             input.style.top = `${evt.offsetY}px`;
-            input.style.transform = "translate(-50%, -50%)"; // Center on cursor
-            input.style.zIndex = "100";
-            input.style.padding = "4px 8px";
-            input.style.borderRadius = "4px";
-            input.style.border = "2px solid var(--interactive-accent)";
-            input.style.background = "var(--background-primary)";
-            input.style.color = "var(--text-normal)";
-            input.style.outline = "none";
-            input.style.boxShadow = "0 4px 6px rgba(0,0,0,0.1)";
 
             this.container.appendChild(input);
             input.focus();
@@ -1111,12 +1018,9 @@ export class SvgGraphEditor {
             evt.preventDefault();
             evt.stopPropagation();
 
+            // 1. MIDDLE CLICK / ALT+CLICK PANNING
             if (evt.button === 1 || (evt.button === 0 && evt.altKey)) {
-                evt.preventDefault();
-                evt.stopPropagation();
                 this.isPanning = true;
-
-                // Cache dimensions once!
                 const clientW = this.container.clientWidth || 800;
                 const clientH = this.container.clientHeight || 300;
 
@@ -1135,94 +1039,102 @@ export class SvgGraphEditor {
             }
 
             const target = evt.target as SVGElement;
+            const isBackground = target === this.svg || target.classList.contains('background-rect');
             const wpHandle = target.closest("circle[data-wp-id]") as SVGCircleElement;
 
+            // 2. BACKGROUND CLICK (Reset Modes)
+            if (isBackground) {
+                this.contextMenu.style.display = "none";
+                this.isLinkingMode = false;
+                this.isDeletingMode = false;
+                this.linkSourceNode = null;
+                this.svg.style.cursor = "grab";
+                this.updateUI();
+                // We don't return here because we might want to start a pan or clear selection
+            }
+
+            // 3. WAYPOINT DRAGGING (Dots on Curves)
             if (wpHandle) {
                 const edgeGroup = target.closest("g[data-edge-id]") as SVGGElement;
                 const edge = this.edges.find(e => e.id === edgeGroup.dataset.edgeId);
                 if (edge && edge.isBendable) {
-                    this.cachedCTM = this.svg.getScreenCTM()
+                    this.cachedCTM = this.svg.getScreenCTM();
                     this.draggedWaypoint = { edge, wpId: wpHandle.dataset.wpId! };
+
+                    // Reset drag buffers
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
+
+                    return; // CRITICAL: Stop here so we don't treat this as a node click
+                }
+            }
+
+            // 3. DELETE MODE (Click to delete nodes or edges)
+            const nodeGroup = target.closest("g[data-node-id]") as SVGGElement;
+            const edgeGroup = target.closest("g[data-edge-id]") as SVGGElement;
+
+            if (this.isDeletingMode)
+            {
+                if (nodeGroup) {
+                    const nodeId = nodeGroup.dataset.nodeId;
+                    this.nodes = this.nodes.filter(n => n.id !== nodeId);
+                    this.edges = this.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+                    this.buildDOM(); this.updatePositions(); this.triggerSave();
+                    return;
+                }
+                
+                if (edgeGroup) {
+                    const edgeId = edgeGroup.dataset.edgeId;
+                    this.edges = this.edges.filter(e => e.id !== edgeId);
+                    this.buildDOM(); this.updatePositions(); this.triggerSave();
                     return;
                 }
             }
 
+            // 4. NODE LOGIC (Drag, Link, Delete, Toggle)
             const group = target.closest("g");
-
             if (group && group.dataset.nodeId) {
-                if (this.isEdgeEditMode) return;
-
                 const clickedNodeId = group.dataset.nodeId;
                 const clickedNode = this.nodes.find(n => n.id === clickedNodeId);
 
-                if (this.isTogglingStartMode && clickedNode) {
-                    clickedNode.isStart = !clickedNode.isStart;
-                    this.buildDOM();
-                    this.updatePositions();
-                    this.triggerSave();
-                    return;
-                }
-
-                if (this.isTogglingAcceptMode && clickedNode) {
-                    clickedNode.isAccepting = !clickedNode.isAccepting;
-                    this.buildDOM();
-                    this.updatePositions();
-                    this.triggerSave();
-                    return;
-                }
-
-                // DELETE MODE LOGIC
-                if (this.isDeletingMode) {
-                    // Remove the node
-                    this.nodes = this.nodes.filter(n => n.id !== clickedNodeId);
-                    // Remove any edges connected to this node
-                    this.edges = this.edges.filter(e => e.source !== clickedNodeId && e.target !== clickedNodeId);
-
-                    this.buildDOM();
-                    this.updatePositions();
-                    this.triggerSave();
-                    return; // Stop here
-                }
-
-                // CONNECTION MODE LOGIC
+                // Linking Mode
                 if (this.isLinkingMode) {
                     if (!this.linkSourceNode) {
-                        // First click: Select source
                         this.linkSourceNode = clickedNodeId;
-                        group.querySelector("circle")?.setAttribute("stroke", "var(--interactive-accent)"); // Highlight it
+                        group.querySelector("circle")?.setAttribute("stroke", "var(--interactive-accent)");
                     } else {
-                        // Second click: Create Edge
                         this.edges.push({
-                            id: `e_${this.linkSourceNode}_${clickedNodeId}`,
+                            id: `e_${Date.now()}`,
                             source: this.linkSourceNode,
                             target: clickedNodeId
                         });
-
-                        // Reset selection
                         this.linkSourceNode = null;
                         this.buildDOM();
                         this.updatePositions();
                         this.triggerSave();
                     }
-                    return; // Stop here so we don't accidentally drag while linking
+                    return;
                 }
 
-                // DRAG MODE LOGIC
-                this.draggedNode = this.nodes.find(n => n.id === clickedNodeId) || null;
+                // Standard Dragging
+                this.draggedNode = clickedNode || null;
                 if (this.draggedNode) {
                     this.cachedCTM = this.svg.getScreenCTM();
-
                     const mousePos = this.getMousePosition(evt);
                     this.dragOffset = {
                         x: mousePos.x - this.draggedNode.position.x,
                         y: mousePos.y - this.draggedNode.position.y
                     };
+
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
                     group.style.cursor = "grabbing";
                 }
             }
         });
 
         this.svg.addEventListener("mousemove", (evt) => {
+            // 1. PANNING PRIORITY
             if (this.isPanning) {
                 const dx = (evt.clientX - this.panStart.x) * this.panScale.x;
                 const dy = (evt.clientY - this.panStart.y) * this.panScale.y;
@@ -1234,24 +1146,30 @@ export class SvgGraphEditor {
                 return;
             }
 
-            if (this.isLinkingMode) return;
+            // 2. BLOCK MODES (Only if not already dragging something)
+            if ((this.isLinkingMode || this.isDeletingMode) && !this.draggedNode && !this.draggedWaypoint) {
+                return;
+            }
 
-            if (!this.hasMovedEnough) {
+            // 3. SLACK BUFFER (Prevent jitter/accidental drags)
+            if (!this.hasMovedEnough && (this.draggedNode || this.draggedWaypoint)) {
                 const dist = Math.sqrt(
                     Math.pow(evt.clientX - this.dragStartPos.x, 2) +
                     Math.pow(evt.clientY - this.dragStartPos.y, 2)
                 );
-                if (dist < 3) return; // Ignore movements smaller than 3 pixels
-                this.hasMovedEnough = true; // Once they move 3px, we start dragging for real
+                if (dist < 3) return;
+                this.hasMovedEnough = true;
             }
+
+            if (!this.draggedNode && !this.draggedWaypoint) return;
 
             evt.preventDefault();
             const mousePos = this.getMousePosition(evt);
 
-            // Handle Edge dragging
+            // 4. HANDLE WAYPOINT DRAGGING
             if (this.draggedWaypoint) {
                 const { edge, wpId } = this.draggedWaypoint;
-                const wp = edge.waypoints!.find(w => w.id === wpId);
+                const wp = edge.waypoints?.find(w => w.id === wpId);
                 if (wp) {
                     wp.x = Math.round(mousePos.x * 10) / 10;
                     wp.y = Math.round(mousePos.y * 10) / 10;
@@ -1260,7 +1178,7 @@ export class SvgGraphEditor {
                 return;
             }
 
-            // Handle Node dragging
+            // 5. HANDLE NODE DRAGGING
             if (this.draggedNode) {
                 const rawX = mousePos.x - this.dragOffset.x;
                 const rawY = mousePos.y - this.dragOffset.y;
@@ -1270,14 +1188,18 @@ export class SvgGraphEditor {
 
                 const dx = newX - this.draggedNode.position.x;
                 const dy = newY - this.draggedNode.position.y;
+
                 this.draggedNode.position = { x: newX, y: newY };
 
+                // Move connected waypoints proportionally
                 this.edges.forEach(edge => {
                     if (edge.waypoints) {
                         edge.waypoints.forEach(wp => {
                             if (edge.source === this.draggedNode!.id && edge.target === this.draggedNode!.id) {
+                                // Self-loop points move 1:1 with node
                                 wp.x += dx; wp.y += dy;
                             } else if (edge.source === this.draggedNode!.id || edge.target === this.draggedNode!.id) {
+                                // Connecting points move 0.5:1 to stay between nodes
                                 wp.x += dx / 2; wp.y += dy / 2;
                             }
                         });
@@ -1395,5 +1317,11 @@ export class SvgGraphEditor {
         this.buildDOM();
         this.updatePositions();
         this.triggerSave();
+    }
+
+    public destroy() {
+        if (this.contextMenu && this.contextMenu.parentNode) {
+            this.contextMenu.remove();
+        }
     }
 }

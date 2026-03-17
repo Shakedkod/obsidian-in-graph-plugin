@@ -14,7 +14,6 @@ export default class ReactStarterPlugin extends Plugin {
             let edges = [];
             let theme = undefined; // Default to undefined so Obsidian classes take over
             let viewport = undefined;
-            let currentSource = source;
 
             try {
                 const data = JSON.parse(source);
@@ -28,100 +27,73 @@ export default class ReactStarterPlugin extends Plugin {
             }
 
             const onSave = async (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => {
-                const file = this.app.workspace.getActiveFile();
-                if (!file) return;
-
-                // Generate the new formatted JSON
-                const newJson = JSON.stringify({ nodes, edges, theme, viewport }, null, 2);
-
-                // Get standard Obsidian block info (Works everywhere EXCEPT callouts)
-                const info = ctx.getSectionInfo(el);
-
-                this.app.vault.process(file, (data) => {
-                    const lines = data.split('\n');
-
-                    // --- STRATEGY 1: NATIVE OBSIDIAN TRACKER (Normal Graphs) ---
-                    if (info) {
-                        const startLine = lines[info.lineStart];
-                        const prefixMatch = startLine.match(/^([>\s]*)/);
-                        const prefix = prefixMatch ? prefixMatch[1] : "";
-
-                        const newLines = newJson.split('\n').map(l => prefix + l);
-                        lines.splice(info.lineStart + 1, info.lineEnd - info.lineStart - 1, ...newLines);
-
-                        currentSource = newJson; // Update memory
-                        return lines.join('\n');
-                    }
-
-                    // --- STRATEGY 2: CALLOUT HUNTER (When getSectionInfo is broken) ---
-                    let blockStart = -1;
-                    let blockEnd = -1;
-                    let currentBlockContent = [];
-                    let blockPrefix = "";
-                    let insideBlock = false;
-
-                    for (let i = 0; i < lines.length; i++) {
-                        const line = lines[i];
-
-                        if (!insideBlock) {
-                            const matchStart = line.match(/^([>\s]*)```in-graph/);
-                            if (matchStart) {
-                                insideBlock = true;
-                                blockStart = i;
-                                blockPrefix = matchStart[1]; // Capture the "> " callout arrows
-                                currentBlockContent = [];
-                            }
-                        } else {
-                            const matchEnd = line.match(/^[>\s]*```/);
-                            if (matchEnd) {
-                                insideBlock = false;
-                                blockEnd = i;
-
-                                const reconstructedSource = currentBlockContent.join('\n');
-
-                                // EXACT MATCH CHECK: Ensure we only update THIS specific graph!
-                                // (We strip hidden carriage returns \r just to be safe on Windows)
-                                if (reconstructedSource.replace(/\r/g, '').trim() === currentSource.replace(/\r/g, '').trim()) {
-
-                                    const newLines = newJson.split('\n').map(l => blockPrefix + l);
-                                    lines.splice(blockStart + 1, blockEnd - blockStart - 1, ...newLines);
-
-                                    currentSource = newJson; // Update memory for the next drag!
-                                    return lines.join('\n');
-                                }
-                            } else {
-                                // Safely strip the callout arrows to read the raw JSON
-                                let cleanLine = line;
-                                if (blockPrefix && line.startsWith(blockPrefix)) {
-                                    cleanLine = line.slice(blockPrefix.length);
-                                } else {
-                                    cleanLine = line.replace(/^[>\s]*/, '');
-                                }
-                                currentBlockContent.push(cleanLine);
-                            }
-                        }
-                    }
-
-                    // Failsafe: if we somehow don't find a match, return the file completely untouched
-                    return data;
-                });
+                this.activeGraphs.set(blockId, { nodes, edges, theme, viewport, source });
             };
 
-            const editor = new SvgGraphEditor(el, nodes, edges, theme, viewport, onSave);
+            const editor = new SvgGraphEditor(el, nodes, edges, viewport, theme, onSave, () => this.batchSaveToFile());
 
             const listenerComponent = new MarkdownRenderChild(el);
             const handleKeyDown = (e: KeyboardEvent) => {
                 // Check for Ctrl+S or Cmd+S
                 if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                     editor.forceSave();
+                    this.batchSaveToFile();
                 }
             };
 
             window.addEventListener('keydown', handleKeyDown, { capture: true });
             listenerComponent.unload = () => {
                 window.removeEventListener('keydown', handleKeyDown, { capture: true });
+                editor.destroy();
+                this.activeGraphs.delete(blockId);
             };
             ctx.addChild(listenerComponent);
         });
+    }
+
+    private batchSaveToFile() {
+        if (this.saveTimeout) clearTimeout(this.saveTimeout);
+
+        this.saveTimeout = setTimeout(async () => {
+            const file = this.app.workspace.getActiveFile();
+            if (!file || this.activeGraphs.size === 0) return;
+
+            await this.app.vault.process(file, (data) => {
+                let newData = data;
+
+                for (const [, graphData] of this.activeGraphs) {
+                    const newJson = JSON.stringify({
+                        nodes: graphData.nodes,
+                        edges: graphData.edges,
+                        theme: graphData.theme,
+                        viewport: graphData.viewport
+                    }, null, 2);
+
+                    // Try direct match first (normal code block)
+                    if (newData.includes(graphData.source)) {
+                        newData = newData.replace(graphData.source, newJson);
+                        graphData.source = newJson;
+                        continue;
+                    }
+
+                    // Callout match: source lines are prefixed with "> " in raw file
+                    const calloutSource = graphData.source
+                        .split('\n')
+                        .map(line => `> ${line}`)
+                        .join('\n');
+
+                    if (newData.includes(calloutSource)) {
+                        const calloutNewJson = newJson
+                            .split('\n')
+                            .map(line => `> ${line}`)
+                            .join('\n');
+                        newData = newData.replace(calloutSource, calloutNewJson);
+                        // Store the clean version (Obsidian strips prefixes next time)
+                        graphData.source = newJson;
+                    }
+                }
+                return newData;
+            });
+        }, 50);
     }
 }
