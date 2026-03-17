@@ -1,11 +1,6 @@
 import { finishRenderMath, renderMath } from "obsidian";
-
-export interface Position { x: number; y: number; }
-export interface GraphNode { id: string; position: Position; label: string; isAccepting?: boolean; isStart?: boolean; color?: string; }
-export interface GraphWaypoint { id: string; x: number; y: number; type: 'linear' | 'bezier'; }
-export interface GraphEdge { id: string; source: string; target: string; label?: string; waypoints?: GraphWaypoint[]; isBendable?: boolean; color?: string; type?: 'arrow' | 'none'; }
-export interface GraphTheme { background?: string; nodeFill?: string; nodeStroke?: string; text?: string; edgeStroke?: string; startArrow?: string; acceptCircle?: string; }
-export interface GraphViewport { height: number; viewBox: { x: number, y: number, w: number, h: number }; }
+import { GraphEdge, GraphNode, GraphViewport, Position } from "src/models/graph";
+import { GraphTheme } from "src/models/theme";
 
 const DEFAULT_THEME: GraphTheme = {
     background: "var(--background-primary)",
