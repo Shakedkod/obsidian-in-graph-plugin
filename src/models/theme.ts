@@ -1,4 +1,5 @@
-export interface GraphTheme {
+export interface GraphTheme
+{
     background?: string;
     nodeFill?: string;
     nodeStroke?: string;
@@ -8,7 +9,16 @@ export interface GraphTheme {
     acceptCircle?: string;
 }
 
-export interface AutomatonThemePreset {
+export const DEFAULT_THEME: GraphTheme = {
+    background: "var(--background-primary)",
+    nodeFill: "var(--background-secondary)",
+    nodeStroke: "var(--text-normal)",
+    text: "var(--text-normal)",
+    edgeStroke: "var(--text-muted)"
+};
+
+export interface AutomatonThemePreset
+{
     name: string;
     theme: GraphTheme;
 }
@@ -27,7 +37,7 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#e2e2e2",
             edgeStroke: "#a0a0b0",
             startArrow: "#e2e2e2",
-            acceptCircle: "#7ec8e3",
+            acceptCircle: "#7ec8e3"
         }
     },
     {
@@ -39,7 +49,7 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#3d2b1f",
             edgeStroke: "#8b7355",
             startArrow: "#5c4a2a",
-            acceptCircle: "#8b4513",
+            acceptCircle: "#8b4513"
         }
     },
     {
@@ -51,7 +61,7 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#00ff99",
             edgeStroke: "#00cc77",
             startArrow: "#00ff99",
-            acceptCircle: "#ff00ff",
+            acceptCircle: "#ff00ff"
         }
     },
     {
@@ -63,7 +73,7 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#c9e8ff",
             edgeStroke: "#4a8db7",
             startArrow: "#5ba4cf",
-            acceptCircle: "#7ecfff",
+            acceptCircle: "#7ecfff"
         }
-    },
+    }
 ];

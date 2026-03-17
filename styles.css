@@ -1,5 +1,6 @@
 /* Container and SVG setup */
-.automaton-graph-container {
+.automaton-graph-container
+{
     position: relative;
     overflow: hidden;
     direction: ltr;
@@ -7,7 +8,8 @@
     -webkit-user-select: none;
 }
 
-.automaton-svg-canvas {
+.automaton-svg-canvas
+{
     width: 100%;
     height: 100%;
     border: 1px solid var(--background-modifier-border);
@@ -16,11 +18,13 @@
 }
 
 /* UI Elements and Resizer */
-.automaton-ui-element {
+.automaton-ui-element
+{
     pointer-events: none;
 }
 
-.obsidian-automaton-resizer {
+.obsidian-automaton-resizer
+{
     position: absolute;
     bottom: 0;
     left: 0;
@@ -32,12 +36,14 @@
     transition: background-color 0.2s;
 }
 
-.obsidian-automaton-resizer:hover {
+.obsidian-automaton-resizer:hover
+{
     background-color: var(--interactive-accent-hover);
 }
 
 /* The Unsaved Changes Dot */
-.automaton-unsaved-dot {
+.automaton-unsaved-dot
+{
     position: absolute;
     top: 12px;
     right: 12px;
@@ -50,46 +56,57 @@
     display: none; /* Controlled by JS */
 }
 
-@keyframes automaton-pulse {
-    0% { transform: scale(1); opacity: 0.5; }
-    50% { transform: scale(1.3); opacity: 1; }
-    100% { transform: scale(1); opacity: 0.5; }
+@keyframes automaton-pulse
+{
+    0%
+    { transform: scale(1); opacity: 0.5; }
+    50%
+    { transform: scale(1.3); opacity: 1; }
+    100%
+    { transform: scale(1); opacity: 0.5; }
 }
 
 /* PDF Printing - Hide UI and Borders */
-@media print {
+@media print
+{
     /* Hide the interactive UI elements */
     .automaton-ui-element,
     .obsidian-automaton-resizer,
-    .automaton-unsaved-dot {
+    .automaton-unsaved-dot
+    {
         display: none !important;
     }
 
     path[stroke="rgba(0,0,0,0.01)"],
-    path[stroke-width="30"] {
+    path[stroke-width="30"]
+    {
         display: none !important;
     }
 
     /* Remove the border from the graph itself for a clean print */
-    .automaton-svg-canvas {
+    .automaton-svg-canvas
+    {
         border: none !important;
         box-shadow: none !important;
         background-color: transparent !important;
     }
 
     /* Ensure the container doesn't have an artificial height limit that cuts things off */
-    .automaton-graph-container {
+    .automaton-graph-container
+    {
         height: auto !important;
         overflow: visible !important;
     }
 }
 
-.automaton-ui-element circle {
+.automaton-ui-element circle
+{
     pointer-events: all !important;
 }
 
 /* Modal and Dialog Styles */
-.automaton-modal-overlay {
+.automaton-modal-overlay
+{
     position: absolute;
     top: 0;
     left: 0;
@@ -103,7 +120,8 @@
     border-radius: 8px;
 }
 
-.automaton-modal-box {
+.automaton-modal-box
+{
     padding: 20px;
     border-radius: 8px;
     border: 1px solid var(--background-modifier-border);
@@ -115,24 +133,28 @@
     background-color: var(--background-primary);
 }
 
-.automaton-modal-title {
+.automaton-modal-title
+{
     margin: 0;
 }
 
-.automaton-modal-textarea {
+.automaton-modal-textarea
+{
     width: 100%;
     resize: vertical;
     background-color: var(--background-secondary);
     color: var(--text-normal);
 }
 
-.automaton-modal-button-row {
+.automaton-modal-button-row
+{
     display: flex;
     justify-content: flex-end;
     gap: 8px;
 }
 
-.automaton-modal-button {
+.automaton-modal-button
+{
     padding: 6px 12px;
     border-radius: 4px;
     border: none;
@@ -141,13 +163,15 @@
     color: var(--text-normal);
 }
 
-.automaton-modal-button-primary {
+.automaton-modal-button-primary
+{
     background-color: var(--interactive-accent);
     color: var(--text-on-accent);
 }
 
 /* Context Menu Styles */
-.automaton-context-menu {
+.automaton-context-menu
+{
     z-index: 1000;
     position: absolute;
     display: none;
@@ -160,7 +184,8 @@
     min-width: 120px;
 }
 
-.automaton-context-menu-item {
+.automaton-context-menu-item
+{
     width: 100%;
     text-align: left;
     background-color: transparent;
@@ -171,24 +196,29 @@
     color: var(--text-normal);
 }
 
-.automaton-context-menu-item:hover {
+.automaton-context-menu-item:hover
+{
     background-color: var(--background-secondary);
 }
 
-.automaton-context-menu-item-error {
+.automaton-context-menu-item-error
+{
     color: var(--text-error);
 }
 
-.automaton-context-menu-accent {
+.automaton-context-menu-accent
+{
     color: var(--interactive-accent);
 }
 
-.automaton-context-menu-divider {
+.automaton-context-menu-divider
+{
     border-bottom: 1px solid var(--background-modifier-border);
     margin: 4px 0;
 }
 
-.automaton-color-picker-wrapper {
+.automaton-color-picker-wrapper
+{
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -197,11 +227,13 @@
     color: var(--text-normal);
 }
 
-.automaton-color-picker-wrapper:hover {
+.automaton-color-picker-wrapper:hover
+{
     background-color: var(--background-secondary);
 }
 
-.automaton-color-picker-input {
+.automaton-color-picker-input
+{
     border: none;
     width: 24px;
     height: 24px;
@@ -211,7 +243,8 @@
 }
 
 /* Inline Text Editor (Double-click) */
-.automaton-inline-editor {
+.automaton-inline-editor
+{
     position: absolute;
     z-index: 100;
     padding: 4px 8px;
@@ -225,7 +258,8 @@
 }
 
 /* Label Content Styles */
-.automaton-label-container {
+.automaton-label-container
+{
     position: absolute;
     transform: translate(-50%, -50%);
     display: flex;
@@ -234,7 +268,8 @@
     pointer-events: none;
 }
 
-.automaton-label-pill {
+.automaton-label-pill
+{
     display: inline-flex;
     align-items: center;
     background-color: transparent;
@@ -245,17 +280,169 @@
     white-space: nowrap;
 }
 
-.automaton-label-pill-text {
+.automaton-label-pill-text
+{
     margin: 0 2px;
 }
 
 /* Ensure the hitbox never interferes with the visual arrow */
-path[stroke="rgba(0,0,0,0.01)"] {
+path[stroke="rgba(0,0,0,0.01)"]
+{
     marker-end: none !important;
     marker-start: none !important;
 }
 
 /* Force the visual path to hide any 'bleed' through the arrow head */
-.automaton-svg-canvas path {
+.automaton-svg-canvas path
+{
     stroke-linecap: butt !important;
+}
+
+/* Unsaved dot — subtle pulse, fades out on save */
+.automaton-unsaved-dot
+{
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--interactive-accent);
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+    animation: automaton-pulse 2s ease-in-out infinite;
+}
+
+@keyframes automaton-pulse
+{
+    0%, 100%
+    { transform: scale(1); opacity: 1; }
+    50%
+    { transform: scale(1.35); opacity: 0.7; }
+}
+
+/* Settings preview area */
+.automaton-settings-preview-wrap
+{
+    margin: 12px 0 20px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.automaton-settings-preview-label
+{
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 6px 12px;
+    margin: 0;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.automaton-settings-preview
+{
+    padding: 8px;
+}
+
+/* Custom theme section */
+.automaton-custom-theme-section
+{
+    border-top: 1px solid var(--background-modifier-border);
+    margin-top: 8px;
+    padding-top: 8px;
+}
+
+/* Context menu — cleaner grouped style */
+.automaton-context-menu
+{
+    position: fixed;
+    z-index: 9999;
+    display: none;
+    flex-direction: column;
+    min-width: 170px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+    padding: 4px;
+    gap: 1px;
+}
+
+.automaton-context-menu-item
+{
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-normal);
+    font-size: 13px;
+    text-align: left;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.automaton-context-menu-item:hover
+{
+    background: var(--background-modifier-hover);
+}
+
+.automaton-context-menu-item-error
+{
+    color: var(--text-error) !important;
+}
+
+.automaton-context-menu-item-error:hover
+{
+    background: rgba(var(--color-red-rgb, 220, 38, 38), 0.1) !important;
+}
+
+.automaton-context-menu-accent
+{
+    color: var(--interactive-accent) !important;
+}
+
+.automaton-context-menu-divider
+{
+    height: 1px;
+    background: var(--background-modifier-border);
+    margin: 3px 0;
+}
+
+.automaton-color-picker-wrapper
+{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    font-size: 13px;
+    color: var(--text-muted);
+    gap: 8px;
+}
+
+.automaton-color-picker-input
+{
+    width: 28px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: none;
+}
+
+/* Link button on node hover */
+.automaton-link-btn
+{
+    transition: opacity 0.15s;
+}
+
+.automaton-link-btn:hover circle
+{
+    filter: brightness(1.15);
 }
