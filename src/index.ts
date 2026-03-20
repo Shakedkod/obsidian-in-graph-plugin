@@ -1,15 +1,29 @@
 import { loadMathJax, MarkdownRenderChild, Plugin, TFile } from "obsidian";
 import { SvgGraphEditor } from "./ui/SvgEditor";
-import { GraphEdge, GraphNode, GraphViewport } from "./models/graph";
+import { GraphEdge, GraphGroup, GraphNode, GraphViewport } from "./models/graph";
 import { GraphTheme, THEME_PRESETS } from "./models/theme";
 import { InGraphPluginSettings } from "./models/settings";
 import { DEFAULT_SETTINGS } from "./models/settings";
+import { CircuitGate, CircuitWire } from "./models/circuits";
 import { InGraphSettingTab } from "./ui/settings";
+
+/*
+* TODO
+*  TODO
+*   TODO: Set the circle radius in automatons states to be the default or if the text is longer, bigger than the
+*     default.
+* TODO
+*  TODO
+*   TODO
+*/
 
 interface GraphRecord
 {
     nodes: GraphNode[];
     edges: GraphEdge[];
+    gates?: CircuitGate[];
+    wires?: CircuitWire[];
+    groups?: GraphGroup[];
     theme?: GraphTheme;
     viewport?: GraphViewport;
     lineStart: number;
@@ -40,11 +54,18 @@ export default class InGraphPlugin extends Plugin
             let theme = undefined;
             let viewport = undefined;
 
+            let gates: CircuitGate[] = [];
+            let wires: CircuitWire[] = [];
+            let groups: GraphGroup[] = [];
+
             try
             {
                 const data = JSON.parse(source);
                 nodes = data.nodes || [];
                 edges = data.edges || [];
+                gates = data.gates || [];
+                wires = data.wires || [];
+                groups = data.groups || [];
                 theme = data.theme;
                 viewport = data.viewport;
             } catch (e)
@@ -109,21 +130,25 @@ export default class InGraphPlugin extends Plugin
 
             const resolvedTheme = this.getResolvedTheme(theme);
 
-            const record: GraphRecord = { nodes, edges, theme, viewport, lineStart, linePrefix };
+            const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix };
             this.activeGraphs.set(blockId, record);
 
             const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], savedTheme?: GraphTheme,
-                                  savedViewport?: GraphViewport) =>
+                                  savedViewport?: GraphViewport, savedGates?: CircuitGate[], savedWires?: CircuitWire[],
+                                  savedGroups?: GraphGroup[]) =>
             {
                 record.nodes = savedNodes;
                 record.edges = savedEdges;
+                record.gates = savedGates ?? record.gates;
+                record.wires = savedWires ?? record.wires;
+                record.groups = savedGroups ?? record.groups;
                 record.theme = savedTheme;
                 record.viewport = savedViewport;
             };
 
             const editor = new SvgGraphEditor(
-                el, nodes, edges,
-                viewport,
+                el, nodes, edges, gates, wires,
+                groups, viewport,
                 resolvedTheme,
                 onSave,
                 () => this.batchSaveToFile()
@@ -217,6 +242,9 @@ export default class InGraphPlugin extends Plugin
                     const newJson = JSON.stringify({
                         nodes: record.nodes,
                         edges: record.edges,
+                        gates: record.gates?.length ? record.gates : undefined,
+                        wires: record.wires?.length ? record.wires : undefined,
+                        groups: record.groups?.length ? record.groups : undefined,
                         theme: record.theme,
                         viewport: record.viewport
                     }, null, 2);
@@ -237,12 +265,12 @@ export default class InGraphPlugin extends Plugin
         }, 50);
     }
 
-    async loadSettings()
+    async loadSettings(): Promise<void>
     {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
 
-    async saveSettings()
+    async saveSettings(): Promise<void>
     {
         await this.saveData(this.settings);
     }

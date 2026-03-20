@@ -51,6 +51,11 @@ export class InGraphSettingTab extends PluginSettingTab {
             { key: "edgeStroke",   label: "Edge color",    desc: "Transition arrows/lines" },
             { key: "startArrow",   label: "Start arrow",   desc: "Arrow indicating start state" },
             { key: "acceptCircle", label: "Accept ring",   desc: "Inner ring of accepting states" },
+            { key: "gateStroke",  label: "Gate border",    desc: "Outline of logic gates" },
+            { key: "gateFill",    label: "Gate fill",       desc: "Inside of logic gates" },
+            { key: "wireActive",  label: "Active wire",     desc: "Color of live circuit wires" },
+            { key: "groupFill",   label: "Group fill",      desc: "Background of group boxes" },
+            { key: "groupStroke", label: "Group border",    desc: "Outline of group boxes" },
         ];
 
         colorFields.forEach(({ key, label, desc }) => {

@@ -1,20 +1,34 @@
 export interface GraphTheme
 {
     background?: string;
-    nodeFill?: string;
-    nodeStroke?: string;
     text?: string;
+    nodeFill?: string;
+
+    // Automaton-specific:
+    nodeStroke?: string;
     edgeStroke?: string;
     startArrow?: string;
     acceptCircle?: string;
+
+    // Circuit-specific:
+    gateStroke?: string;
+    gateFill?: string;
+    wireActive?: string;
+    groupFill?: string;
+    groupStroke?: string;
 }
 
 export const DEFAULT_THEME: GraphTheme = {
-    background: "var(--background-primary)",
-    nodeFill: "var(--background-secondary)",
-    nodeStroke: "var(--text-normal)",
-    text: "var(--text-normal)",
-    edgeStroke: "var(--text-muted)"
+    background:  "var(--background-primary)",
+    nodeFill:    "var(--background-secondary)",
+    nodeStroke:  "var(--text-normal)",
+    text:        "var(--text-normal)",
+    edgeStroke:  "var(--text-muted)",
+    gateStroke:  "var(--text-normal)",
+    gateFill:    "var(--background-secondary)",
+    wireActive:  "#f59e0b",
+    groupFill:   "rgba(120,120,180,0.06)",
+    groupStroke: "var(--text-muted)",
 };
 
 export interface AutomatonThemePreset

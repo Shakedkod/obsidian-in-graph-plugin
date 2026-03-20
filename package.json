@@ -14,11 +14,7 @@
     "test:watch": "yarn test -- --watch"
   },
   "dependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
     "obsidian": "obsidianmd/obsidian-api#master",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
     "tslib": "2.1.0"
   },
   "devDependencies": {

@@ -1,6 +1,8 @@
 import { finishRenderMath, renderMath } from "obsidian";
-import { GraphEdge, GraphNode, GraphViewport, Position } from "../models/graph";
+import { GraphEdge, GraphGroup, GraphNode, GraphViewport, Position } from "../models/graph";
 import { DEFAULT_THEME, GraphTheme } from "../models/theme";
+import { CircuitGate, CircuitWire, GATE_SIZE, GateType } from "../models/circuits";
+import { CircuitSimulator, getPortPositions } from "../services/circuitSimulator";
 
 export class SvgGraphEditor
 {
@@ -12,7 +14,7 @@ export class SvgGraphEditor
     private contextMenu: HTMLDivElement;
     private unsavedDot: HTMLDivElement;
 
-    private readonly viewBox = { x: 0, y: 0, w: 800, h: 500 };
+    private viewBox = { x: 0, y: 0, w: 800, h: 500 };
     private isPanning = false;
     private panStart: Position = { x: 0, y: 0 };
     private panStartViewBox: Position = { x: 0, y: 0 };
@@ -23,7 +25,26 @@ export class SvgGraphEditor
 
     nodes: GraphNode[];
     edges: GraphEdge[];
+    groups: GraphGroup[] = [];
     theme: GraphTheme;
+
+    // ── Circuit fields ──
+    gates: CircuitGate[] = [];
+    wires: CircuitWire[] = [];
+    private simulator: CircuitSimulator = new CircuitSimulator([], []);
+    private gateElements: Map<string, SVGGElement> = new Map();
+    private wireElements: Map<string, SVGPathElement> = new Map();
+    private draggedWireWaypoint: { wire: CircuitWire; wpId: string } | null = null;
+    private draggedGate: CircuitGate | null = null;
+    private wiringFrom: { gateId: string; port: string; pos: { x: number; y: number } } | null = null;
+    private wiringPreviewLine: SVGLineElement | null = null;
+
+    // Group fields
+    private groupElements: Map<string, SVGGElement> = new Map();
+    private draggedGroup: GraphGroup | null = null;
+    private draggedGroupResize: GraphGroup | null = null;
+    private resizeStartSize: { w: number; h: number } | null = null;
+    private resizeStartMouse: Position | null = null;
 
     private nodeElements: Map<string, SVGGElement> = new Map();
     private edgeElements: Map<string, {
@@ -37,7 +58,7 @@ export class SvgGraphEditor
     private draggedWaypoint: { edge: GraphEdge, wpId: string } | null = null;
     private dragOffset: Position = { x: 0, y: 0 };
 
-    // Linking state only — no more delete mode
+    // Linking state
     private isLinkingMode = false;
     private linkSourceNode: string | null = null;
 
@@ -52,6 +73,9 @@ export class SvgGraphEditor
         container: HTMLElement,
         initialNodes: GraphNode[],
         initialEdges: GraphEdge[],
+        initialGates: CircuitGate[] = [],
+        initialWires: CircuitWire[] = [],
+        initialGroups: GraphGroup[] = [],
         initialViewport: GraphViewport | undefined,
         userTheme: GraphTheme | undefined,
         onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void,
@@ -66,6 +90,11 @@ export class SvgGraphEditor
 
         this.nodes = initialNodes;
         this.edges = initialEdges;
+        this.gates = initialGates;
+        this.wires = initialWires;
+        this.groups = initialGroups;
+        this.simulator = new CircuitSimulator(this.gates, this.wires);
+        this.simulator.propagate();
         this.onSave = onSave;
         this.onManualSave = onManualSave;
         this.theme = { ...DEFAULT_THEME, ...userTheme };
@@ -93,18 +122,71 @@ export class SvgGraphEditor
         this.buildResizer();
         this.initEvents();
         this.updatePositions();
+        if (!initialViewport?.viewBox) this.fitViewToContent();
     }
 
     // ─── SAVE ───────────────────────────────────────────────────────────────────
 
+    private getContentViewBox(pad = 50): { x: number; y: number; w: number; h: number }
+    {
+        const xs: number[] = [];
+        const ys: number[] = [];
+
+        this.nodes.forEach(n =>
+        {
+            xs.push(n.position.x - 35, n.position.x + 35);
+            ys.push(n.position.y - 35, n.position.y + 35);
+        });
+        this.gates.forEach(g =>
+        {
+            xs.push(g.position.x - 35, g.position.x + 35);
+            ys.push(g.position.y - 30, g.position.y + 40);
+        });
+        this.groups.forEach(g =>
+        {
+            xs.push(g.x, g.x + g.w);
+            ys.push(g.y - 14, g.y + g.h);
+        });
+
+        if (xs.length === 0) return { ...this.viewBox };
+
+        const minX = Math.min(...xs) - pad;
+        const minY = Math.min(...ys) - pad;
+        const maxX = Math.max(...xs) + pad;
+        const maxY = Math.max(...ys) + pad;
+        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+
+    // Expand viewBox to ensure it contains all content (no clipping), preserving center + zoom
+    private clampViewBoxToContent(vb: { x: number; y: number; w: number; h: number }): {
+        x: number;
+        y: number;
+        w: number;
+        h: number
+    }
+    {
+        const content = this.getContentViewBox(20);
+        return {
+            x: Math.min(vb.x, content.x),
+            y: Math.min(vb.y, content.y),
+            w: Math.max(vb.x + vb.w, content.x + content.w) - Math.min(vb.x, content.x),
+            h: Math.max(vb.y + vb.h, content.y + content.h) - Math.min(vb.y, content.y)
+        };
+    }
+
     private triggerSave(forceFileWrite = false)
     {
         const h = Math.max(100, this.container.clientHeight || parseInt(this.container.style.height) || 300);
-        const currentViewport: GraphViewport = { height: h, viewBox: { ...this.viewBox } };
+        // Save the user's current view, but expanded to never clip content
+        const savedViewBox = this.clampViewBoxToContent({ ...this.viewBox });
+        const currentViewport: GraphViewport = { height: h, viewBox: savedViewBox };
 
         if (forceFileWrite)
         {
-            this.onSave(this.nodes, this.edges, this.theme, currentViewport);
+            (this.onSave as (n: GraphNode[], e: GraphEdge[], t?: GraphTheme, v?: GraphViewport, g?: CircuitGate[],
+                             w?: CircuitWire[], grp?: GraphGroup[]) => void)(
+                this.nodes, this.edges, this.theme, currentViewport, this.gates, this.wires, this.groups
+            );
             this.unsavedDot.style.opacity = "0";
         } else
         {
@@ -112,7 +194,7 @@ export class SvgGraphEditor
         }
     }
 
-    public forceSave()
+    public forceSave(): void
     {
         this.triggerSave(true);
     }
@@ -122,6 +204,13 @@ export class SvgGraphEditor
     private updateViewBox()
     {
         this.svg.setAttribute("viewBox", `${this.viewBox.x} ${this.viewBox.y} ${this.viewBox.w} ${this.viewBox.h}`);
+    }
+
+    public fitViewToContent()
+    {
+        const fitted = this.getContentViewBox(60);
+        this.viewBox = fitted;
+        this.updateViewBox();
     }
 
     // ─── RESIZER ────────────────────────────────────────────────────────────────
@@ -376,8 +465,8 @@ export class SvgGraphEditor
             const spread = 0.4, ctrlSpread = 0.5;
             return {
                 path: `M ${sx + Math.cos(loopAngle - spread) * radius} ${sy + Math.sin(loopAngle - spread) * radius} C ${sx + Math.cos(loopAngle - ctrlSpread) * pushOut} ${sy + Math.sin(loopAngle - ctrlSpread) * pushOut}, ${sx + Math.cos(loopAngle + ctrlSpread) * pushOut} ${sy + Math.sin(loopAngle + ctrlSpread) * pushOut}, ${sx + Math.cos(loopAngle + spread) * radius} ${sy + Math.sin(loopAngle + spread) * radius}`,
-                lx: sx + Math.cos(loopAngle) * curvePeak + Math.cos(loopAngle) * 20,
-                ly: sy + Math.sin(loopAngle) * curvePeak + Math.sin(loopAngle) * 20,
+                lx: sx + Math.cos(loopAngle) * curvePeak + Math.cos(loopAngle) * 12,
+                ly: sy + Math.sin(loopAngle) * curvePeak + Math.sin(loopAngle) * 12,
                 hx: 0, hy: 0
             };
         }
@@ -452,8 +541,8 @@ export class SvgGraphEditor
                     const segDx = allPoints[i + 1].x - allPoints[i].x;
                     const segDy = allPoints[i + 1].y - allPoints[i].y;
                     const dist = distances[i] || 1;
-                    lx = midX + (segDy / dist) * 20;
-                    ly = midY + (-segDx / dist) * 20;
+                    lx = midX + (segDy / dist) * 12;
+                    ly = midY + (-segDx / dist) * 12;
                     break;
                 }
                 runningDist += distances[i];
@@ -480,7 +569,7 @@ export class SvgGraphEditor
             const hx = (midX + ctrlX) / 2, hy = (midY + ctrlY) / 2;
             return {
                 path: `M ${startX} ${startY} Q ${ctrlX} ${ctrlY} ${endX} ${endY}`,
-                lx: hx + nx * 20, ly: hy + ny * 20, hx, hy
+                lx: hx + nx * 12, ly: hy + ny * 12, hx, hy
             };
         }
 
@@ -491,7 +580,7 @@ export class SvgGraphEditor
         const hx = (startX + endX) / 2, hy = (startY + endY) / 2;
         return {
             path: `M ${startX} ${startY} L ${endX} ${endY}`,
-            lx: hx + nx * 20, ly: hy + ny * 20, hx, hy
+            lx: hx + nx * 12, ly: hy + ny * 12, hx, hy
         };
     }
 
@@ -504,6 +593,65 @@ export class SvgGraphEditor
         this.nodeElements.clear();
         this.edgeElements.clear();
         this.linkButton = null;
+
+        this.groupElements.clear();
+
+        // Draw groups first (behind everything)
+        this.groups.forEach(group =>
+        {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            g.dataset.groupId = group.id;
+
+            // Main frame rect — drag target
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute("rx", "8");
+            rect.setAttribute("fill", group.color ? group.color + "18" : (this.theme.groupFill || "rgba(120,120,180,0.06)"));
+            rect.setAttribute("stroke", group.color || this.theme.groupStroke || "var(--text-muted)");
+            rect.setAttribute("stroke-width", "1.5");
+            rect.setAttribute("stroke-dasharray", "6 4");
+            rect.style.cursor = "move";
+            rect.dataset.groupDragId = group.id;
+            g.appendChild(rect);
+
+            // Label pill background
+            const labelBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            labelBg.setAttribute("rx", "4");
+            labelBg.setAttribute("height", "20");
+            labelBg.setAttribute("fill", group.color || this.theme.groupStroke || "var(--text-muted)");
+            labelBg.setAttribute("opacity", "0.18");
+            labelBg.setAttribute("pointer-events", "none");
+            g.appendChild(labelBg);
+
+            // Label text
+            const labelEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            labelEl.setAttribute("font-size", "11");
+            labelEl.setAttribute("font-weight", "600");
+            labelEl.setAttribute("font-family", "var(--font-sans, sans-serif)");
+            labelEl.setAttribute("fill", group.color || this.theme.text || "var(--text-normal)");
+            labelEl.setAttribute("dominant-baseline", "central");
+            labelEl.setAttribute("pointer-events", "none");
+            labelEl.textContent = group.label || "Group";
+            g.appendChild(labelEl);
+
+            // Resize grip — 3 diagonal lines at bottom-right
+            const grip = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            grip.dataset.groupResizeId = group.id;
+            grip.style.cursor = "nwse-resize";
+            for (let i = 0; i < 3; i++)
+            {
+                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                line.setAttribute("stroke", group.color || this.theme.groupStroke || "var(--text-muted)");
+                line.setAttribute("stroke-width", "1.5");
+                line.setAttribute("stroke-linecap", "round");
+                line.setAttribute("opacity", "0.5");
+                line.dataset.groupResizeId = group.id;
+                grip.appendChild(line);
+            }
+            g.appendChild(grip);
+
+            this.svg.appendChild(g);
+            this.groupElements.set(group.id, g);
+        });
 
         // Arrow marker
         const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
@@ -599,8 +747,7 @@ export class SvgGraphEditor
             circle.setAttribute("cx", "0");
             circle.setAttribute("cy", "0");
             circle.setAttribute("r", "25");
-            if (node.isAccepting) circle.setAttribute("stroke", this.theme.acceptCircle || nodeColor);
-            else circle.setAttribute("stroke", nodeColor);
+            circle.setAttribute("stroke", nodeColor);
             circle.setAttribute("fill", this.theme.nodeFill || "var(--background-primary)");
             circle.setAttribute("stroke-width", "2");
             group.appendChild(circle);
@@ -656,11 +803,62 @@ export class SvgGraphEditor
 
         // Link button lives on top of everything
         this.buildLinkButton();
-
         finishRenderMath();
+        this.buildGateDOM();
     }
 
     // ─── POSITIONS ──────────────────────────────────────────────────────────────
+
+
+    private updateGroupPositions()
+    {
+        this.groups.forEach(group =>
+        {
+            const g = this.groupElements.get(group.id);
+            if (!g) return;
+
+            const rect = g.querySelector("rect[data-group-drag-id]") as SVGRectElement;
+            const labelBg = g.querySelectorAll("rect")[1] as SVGRectElement;
+            const labelEl = g.querySelector("text") as SVGTextElement;
+            const grip = g.querySelector("g[data-group-resize-id]") as SVGGElement;
+
+            if (rect)
+            {
+                rect.setAttribute("x", group.x.toString());
+                rect.setAttribute("y", group.y.toString());
+                rect.setAttribute("width", group.w.toString());
+                rect.setAttribute("height", group.h.toString());
+            }
+
+            const textWidth = Math.max(60, (group.label || "Group").length * 7 + 16);
+            if (labelBg)
+            {
+                labelBg.setAttribute("x", (group.x + 10).toString());
+                labelBg.setAttribute("y", (group.y - 10).toString());
+                labelBg.setAttribute("width", textWidth.toString());
+            }
+            if (labelEl)
+            {
+                labelEl.setAttribute("x", (group.x + 18).toString());
+                labelEl.setAttribute("y", (group.y).toString());
+            }
+
+            // Resize grip: 3 diagonal lines at bottom-right corner
+            if (grip)
+            {
+                const gx = group.x + group.w;
+                const gy = group.y + group.h;
+                const lines = grip.querySelectorAll("line");
+                [6, 10, 14].forEach((o, i) =>
+                {
+                    lines[i]?.setAttribute("x1", (gx - o).toString());
+                    lines[i]?.setAttribute("y1", gy.toString());
+                    lines[i]?.setAttribute("x2", gx.toString());
+                    lines[i]?.setAttribute("y2", (gy - o).toString());
+                });
+            }
+        });
+    }
 
     private updatePositions()
     {
@@ -694,6 +892,7 @@ export class SvgGraphEditor
                 });
             }
         });
+        this.updateGroupPositions();
     }
 
     // ─── MOUSE HELPERS ──────────────────────────────────────────────────────────
@@ -796,6 +995,41 @@ export class SvgGraphEditor
         this.contextMenu.appendChild(wrapper);
     }
 
+    private addSubMenu(label: string, builder: (sub: HTMLElement) => void)
+    {
+        const wrapper = document.createElement("div");
+        wrapper.addClass("automaton-context-submenu-wrapper");
+
+        const btn = document.createElement("button");
+        btn.textContent = label + " ›";
+        btn.addClass("automaton-context-menu-item", "automaton-context-submenu-trigger");
+
+        const sub = document.createElement("div");
+        sub.addClass("automaton-context-submenu");
+        builder(sub);
+
+        wrapper.appendChild(btn);
+        wrapper.appendChild(sub);
+        this.contextMenu.appendChild(wrapper);
+    }
+
+    private addSubMenuItem(container: HTMLElement, text: string, onClick: () => void,
+                           variant: "normal" | "danger" | "accent" = "normal")
+    {
+        const btn = document.createElement("button");
+        btn.textContent = text;
+        btn.addClass("automaton-context-menu-item");
+        if (variant === "danger") btn.addClass("automaton-context-menu-item-error");
+        if (variant === "accent") btn.addClass("automaton-context-menu-accent");
+        btn.onclick = (e) =>
+        {
+            e.stopPropagation();
+            this.contextMenu.style.display = "none";
+            onClick();
+        };
+        container.appendChild(btn);
+    }
+
     // ─── EVENTS ─────────────────────────────────────────────────────────────────
 
     private initEvents()
@@ -814,6 +1048,7 @@ export class SvgGraphEditor
             const nodeGroup = target.closest("g[data-node-id]") as SVGGElement;
             const edgeGroup = target.closest("g[data-edge-id]") as SVGGElement;
             const wpHandle = target.closest("circle[data-wp-id]") as SVGCircleElement;
+            const gateGroupCtx = target.closest("g[data-gate-id]") as SVGGElement;
 
             // NODE SECTION
             if (nodeGroup?.dataset.nodeId)
@@ -864,10 +1099,12 @@ export class SvgGraphEditor
                     {
                         // Waypoint sub-menu
                         const wpId = wpHandle.dataset.wpId;
-                        const wpIdx = edge.waypoints!.findIndex(w => w.id === wpId);
-                        const wp = edge.waypoints![wpIdx];
-                        this.addMenuItem(wp.type === "bezier" ? "Change to linear" : "Change to bezier", () =>
+                        const wpIdx = (edge.waypoints ?? []).findIndex(w => w.id === wpId);
+                        const wp = edge.waypoints?.[wpIdx];
+                        if (!wp) return;
+                        this.addMenuItem(wp?.type === "bezier" ? "Change to linear" : "Change to bezier", () =>
                         {
+                            if (!wp) return;
                             wp.type = wp.type === "bezier" ? "linear" : "bezier";
                             this.buildDOM();
                             this.updatePositions();
@@ -876,8 +1113,8 @@ export class SvgGraphEditor
                         this.addDivider();
                         this.addMenuItem("Delete point", () =>
                         {
-                            edge.waypoints!.splice(wpIdx, 1);
-                            if (!edge.waypoints!.length) delete edge.waypoints;
+                            edge.waypoints?.splice(wpIdx, 1);
+                            if (!edge.waypoints?.length) delete edge.waypoints;
                             this.buildDOM();
                             this.updatePositions();
                             this.triggerSave();
@@ -947,25 +1184,206 @@ export class SvgGraphEditor
                 }
             }
 
-            // CANVAS SECTION (always at bottom, or only section if on blank canvas)
-            else
+            // GATE SECTION
+            if (gateGroupCtx?.dataset.gateId)
             {
-                this.addMenuItem("Add state here", () =>
+                const gate = this.gates.find(g => g.id === gateGroupCtx.dataset.gateId);
+                if (gate)
                 {
-                    const mp = this.getMousePosition(evt);
-                    const newId = `q${this.nodes.length}`;
-                    this.nodes.push({ id: newId, position: { x: mp.x, y: mp.y }, label: newId });
-                    this.buildDOM();
-                    this.updatePositions();
-                    this.triggerSave();
-                });
-                this.addMenuItem("Import DOT", () => this.showDotImportModal());
-                this.addDivider();
-                this.addMenuItem("Save", () =>
+                    this.addMenuItem("Rename label", () =>
+                    {
+                        this.contextMenu.style.display = "none";
+                        const gateEl = this.gateElements.get(gate.id);
+                        if (!gateEl) return;
+                        // Position inline editor near the gate in screen space
+                        const ctm = this.svg.getScreenCTM();
+                        const svgRect = this.svg.getBoundingClientRect();
+                        const gx = gate.position.x;
+                        const gy = gate.position.y;
+                        const screenX = ctm ? (gx * ctm.a + ctm.e) - svgRect.left : gx;
+                        const screenY = ctm ? (gy * ctm.d + ctm.f) - svgRect.top : gy;
+
+                        const input = document.createElement("input");
+                        input.type = "text";
+                        input.value = gate.label ?? gate.type;
+                        input.placeholder = "Label";
+                        input.addClass("automaton-inline-editor");
+                        input.style.left = `${screenX}px`;
+                        input.style.top = `${screenY + 20}px`;
+                        this.container.appendChild(input);
+                        input.focus();
+                        input.select();
+
+                        let saved = false;
+                        const save = () =>
+                        {
+                            if (saved) return;
+                            saved = true;
+                            gate.label = input.value;
+                            input.remove();
+                            this.buildDOM();
+                            this.updatePositions();
+                            this.triggerSave();
+                        };
+                        input.addEventListener("blur", save);
+                        input.addEventListener("keydown", (e) =>
+                        {
+                            if (e.key === "Enter") save();
+                            if (e.key === "Escape")
+                            {
+                                saved = true;
+                                input.remove();
+                            }
+                        });
+                    });
+                    if (gate.type === "INPUT")
+                    {
+                        this.addMenuItem("Toggle value", () =>
+                        {
+                            this.simulator.toggleInput(gate.id);
+                            this.updateCircuitVisuals();
+                            this.triggerSave();
+                        });
+                    }
+                    this.addDivider();
+                    this.addMenuItem("Export truth table", () => this.showTruthTableModal());
+                    this.addDivider();
+                    this.addMenuItem("Delete gate", () =>
+                    {
+                        const gId = gate.id;
+                        this.gates = this.gates.filter(g => g.id !== gId);
+                        this.wires = this.wires.filter(w => w.fromGate !== gId && w.toGate !== gId);
+                        this.simulator.rebuild(this.gates, this.wires);
+                        this.simulator.propagate();
+                        this.buildDOM();
+                        this.updatePositions();
+                        this.triggerSave();
+                    }, "danger");
+                }
+            }
+
+            // WIRE SECTION
+            else if (!gateGroupCtx && !nodeGroup && !edgeGroup)
+            {
+                // Match either the hitbox (direct target) or visible path
+                const wireEl = (
+                    target.dataset?.wireId ? target :
+                        target.closest("[data-wire-id]")
+                ) as SVGPathElement;
+                if (wireEl?.dataset.wireId)
                 {
-                    this.triggerSave(true);
-                    this.onManualSave();
-                }, "accent");
+                    const wire = this.wires.find(w => w.id === wireEl.dataset.wireId);
+                    if (wire)
+                    {
+                        this.addMenuItem(wire.isBendable ? "Lock path" : "Unlock path", () =>
+                        {
+                            wire.isBendable = !wire.isBendable;
+                            this.buildDOM();
+                            this.updatePositions();
+                            this.triggerSave();
+                        });
+                        if (wire.isBendable)
+                        {
+                            this.addMenuItem("Add bezier point", () =>
+                            {
+                                const mp = this.getMousePosition(evt);
+                                (wire.waypoints ??= []).push({
+                                    id: Date.now().toString(),
+                                    x: mp.x,
+                                    y: mp.y,
+                                    type: "bezier"
+                                });
+                                this.buildDOM();
+                                this.updatePositions();
+                                this.triggerSave();
+                            });
+                            this.addMenuItem("Add linear point", () =>
+                            {
+                                const mp = this.getMousePosition(evt);
+                                (wire.waypoints ??= []).push({
+                                    id: Date.now().toString(),
+                                    x: mp.x,
+                                    y: mp.y,
+                                    type: "linear"
+                                });
+                                this.buildDOM();
+                                this.updatePositions();
+                                this.triggerSave();
+                            });
+                            this.addDivider();
+                        }
+                    }
+                    this.addMenuItem("Delete wire", () =>
+                    {
+                        const delWireId = wireEl.dataset.wireId;
+                        this.wires = this.wires.filter(w => w.id !== delWireId);
+                        this.simulator.rebuild(this.gates, this.wires);
+                        this.simulator.propagate();
+                        this.buildDOM();
+                        this.updatePositions();
+                        this.triggerSave();
+                    }, "danger");
+                } else
+                {
+                    // CANVAS SECTION
+                    this.addMenuItem("Add state here", () =>
+                    {
+                        const mp = this.getMousePosition(evt);
+                        const newId = `q${this.nodes.length}`;
+                        this.nodes.push({ id: newId, position: { x: mp.x, y: mp.y }, label: newId });
+                        this.buildDOM();
+                        this.updatePositions();
+                        this.triggerSave();
+                    });
+                    this.addDivider();
+                    this.addSubMenu("Add gate", (sub) =>
+                    {
+                        const gateTypes: GateType[] = ["INPUT", "OUTPUT", "AND", "OR", "NOT", "NAND", "NOR", "XOR", "XNOR"];
+                        gateTypes.forEach(type =>
+                        {
+                            this.addSubMenuItem(sub, type, () =>
+                            {
+                                const mp = this.getMousePosition(evt);
+                                const newGate: CircuitGate = {
+                                    id: `g_${Date.now()}`,
+                                    type,
+                                    position: { x: mp.x, y: mp.y },
+                                    label: (type === "INPUT" || type === "OUTPUT") ? "" : undefined
+                                };
+                                this.gates.push(newGate);
+                                this.simulator.rebuild(this.gates, this.wires);
+                                this.simulator.propagate();
+                                this.buildDOM();
+                                this.updatePositions();
+                                this.triggerSave();
+                            });
+                        });
+                    });
+                    this.addDivider();
+                    this.addMenuItem("Export truth table", () => this.showTruthTableModal());
+                    this.addMenuItem("Add frame here", () =>
+                    {
+                        const mp = this.getMousePosition(evt);
+                        this.groups.push({
+                            id: `grp_${Date.now()}`,
+                            label: "Group",
+                            x: mp.x - 80,
+                            y: mp.y - 60,
+                            w: 220,
+                            h: 160
+                        });
+                        this.buildDOM();
+                        this.updatePositions();
+                        this.triggerSave();
+                    });
+                    this.addMenuItem("Import DOT", () => this.showDotImportModal());
+                    this.addDivider();
+                    this.addMenuItem("Save", () =>
+                    {
+                        this.triggerSave(true);
+                        this.onManualSave();
+                    }, "accent");
+                }
             }
 
             this.showContextMenu(evt.clientX, evt.clientY);
@@ -1007,6 +1425,47 @@ export class SvgGraphEditor
                     this.triggerSave();
                 }
                 return;
+            }
+
+            // Double-click on group label area → rename
+            const groupDblEl = target.closest("[data-group-drag-id]") as SVGElement;
+            if (groupDblEl?.dataset?.groupDragId)
+            {
+                const grp = this.groups.find(g => g.id === (groupDblEl as unknown as HTMLElement).dataset.groupDragId);
+                if (grp)
+                {
+                    const input = document.createElement("input");
+                    input.type = "text";
+                    input.value = grp.label || "";
+                    input.placeholder = "Frame label";
+                    input.addClass("automaton-inline-editor");
+                    input.style.left = `${evt.offsetX}px`;
+                    input.style.top = `${evt.offsetY}px`;
+                    this.container.appendChild(input);
+                    input.focus();
+                    input.select();
+                    let saved = false;
+                    const save = () =>
+                    {
+                        if (saved) return;
+                        saved = true;
+                        grp.label = input.value;
+                        input.remove();
+                        this.updateGroupPositions();
+                        this.triggerSave();
+                    };
+                    input.addEventListener("blur", save);
+                    input.addEventListener("keydown", (e) =>
+                    {
+                        if (e.key === "Enter") save();
+                        if (e.key === "Escape")
+                        {
+                            saved = true;
+                            input.remove();
+                        }
+                    });
+                    return;
+                }
             }
 
             let editTarget: GraphNode | GraphEdge | null = null;
@@ -1091,6 +1550,40 @@ export class SvgGraphEditor
             const wpHandle = target.closest("circle[data-wp-id]") as SVGCircleElement;
             const nodeGroup = target.closest("g[data-node-id]") as SVGGElement;
 
+            // Group resize (check before drag so grip takes priority)
+            const resizeEl = target.closest("[data-group-resize-id]") as SVGElement;
+            if (resizeEl?.dataset?.groupResizeId)
+            {
+                const grp = this.groups.find(g => g.id === resizeEl.dataset.groupResizeId);
+                if (grp)
+                {
+                    this.cachedCTM = this.svg.getScreenCTM();
+                    this.draggedGroupResize = grp;
+                    this.resizeStartSize = { w: grp.w, h: grp.h };
+                    this.resizeStartMouse = this.getMousePosition(evt);
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
+                    return;
+                }
+            }
+
+            // Group drag
+            const groupDragEl = target.closest("[data-group-drag-id]") as SVGElement;
+            if (groupDragEl?.dataset?.groupDragId)
+            {
+                const grp = this.groups.find(g => g.id === groupDragEl.dataset.groupDragId);
+                if (grp)
+                {
+                    this.cachedCTM = this.svg.getScreenCTM();
+                    const mp = this.getMousePosition(evt);
+                    this.dragOffset = { x: mp.x - grp.x, y: mp.y - grp.y };
+                    this.draggedGroup = grp;
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
+                    return;
+                }
+            }
+
             // Waypoint drag
             if (wpHandle)
             {
@@ -1099,7 +1592,24 @@ export class SvgGraphEditor
                 if (edge?.isBendable)
                 {
                     this.cachedCTM = this.svg.getScreenCTM();
-                    this.draggedWaypoint = { edge, wpId: wpHandle.dataset.wpId! };
+                    this.draggedWaypoint = { edge, wpId: wpHandle.dataset.wpId ?? "" };
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
+                    return;
+                }
+            }
+
+            // Wire waypoint drag — must come before node drag
+            const wireWpEl = target.closest("circle[data-wire-wp-id]") as SVGCircleElement;
+            if (wireWpEl)
+            {
+                const wId = wireWpEl.dataset.wireId ?? "";
+                const wpId = wireWpEl.dataset.wireWpId ?? "";
+                const wire = this.wires.find(w => w.id === wId);
+                if (wire?.isBendable)
+                {
+                    this.cachedCTM = this.svg.getScreenCTM();
+                    this.draggedWireWaypoint = { wire, wpId };
                     this.dragStartPos = { x: evt.clientX, y: evt.clientY };
                     this.hasMovedEnough = false;
                     return;
@@ -1115,7 +1625,7 @@ export class SvgGraphEditor
                     this.startLinking(clickedId);
                 } else
                 {
-                    this.edges.push({ id: `e_${Date.now()}`, source: this.linkSourceNode, target: clickedId, type: "arrow" });
+                    this.edges.push({ id: `e_${Date.now()}`, source: this.linkSourceNode, target: clickedId });
                     this.linkSourceNode = null;
                     this.isLinkingMode = false;
                     this.svg.style.cursor = "grab";
@@ -1141,6 +1651,77 @@ export class SvgGraphEditor
                     nodeGroup.style.cursor = "grabbing";
                 }
             }
+
+            // Port click → start/finish wiring
+            const portEl = target.closest("circle[data-gate-port]") as SVGCircleElement;
+            if (portEl)
+            {
+                evt.stopPropagation();
+                const gateId = portEl.dataset.gateId ?? "";
+                const port = portEl.dataset.gatePort ?? "";
+                const gate = this.gates.find(g => g.id === gateId);
+                if (!gate) return;
+                const pp = getPortPositions(gate.type);
+                const localPort = pp[port];
+                const worldPos = { x: gate.position.x + localPort.x, y: gate.position.y + localPort.y };
+
+                if (!this.wiringFrom)
+                {
+                    // Start wiring from an output port
+                    if (port === "out")
+                    {
+                        this.wiringFrom = { gateId, port, pos: worldPos };
+                        this.startWiringPreview(worldPos);
+                    }
+                } else
+                {
+                    // Finish wiring to an input port
+                    if (port !== "out" && this.wiringFrom.gateId !== gateId)
+                    {
+                        // Check not already connected
+                        const exists = this.wires.some(w => w.toGate === gateId && w.toPort === port);
+                        if (!exists)
+                        {
+                            this.wires.push({
+                                id: `w_${Date.now()}`,
+                                fromGate: this.wiringFrom.gateId,
+                                fromPort: this.wiringFrom.port,
+                                toGate: gateId,
+                                toPort: port
+                            });
+                            this.simulator.rebuild(this.gates, this.wires);
+                            this.simulator.propagate();
+                            this.buildDOM();
+                            this.updatePositions();
+                            this.triggerSave();
+                        }
+                    }
+                    this.cancelWiring();
+                }
+                return;
+            }
+
+            // Gate body drag (INPUT toggle handled in endDrag when !hasMovedEnough)
+            const gateGroup = target.closest("g[data-gate-id]") as SVGGElement;
+            if (gateGroup?.dataset.gateId && !portEl)
+            {
+                const gate = this.gates.find(g => g.id === gateGroup.dataset.gateId) || null;
+                if (gate)
+                {
+                    this.draggedGate = gate;
+                    this.cachedCTM = this.svg.getScreenCTM();
+                    const mp = this.getMousePosition(evt);
+                    this.dragOffset = { x: mp.x - gate.position.x, y: mp.y - gate.position.y };
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
+                }
+            }
+
+            // Cancel wiring on background click
+            if (this.wiringFrom && !portEl && !gateGroup)
+            {
+                this.cancelWiring();
+            }
         });
 
         // ── MOUSE MOVE ──
@@ -1154,21 +1735,50 @@ export class SvgGraphEditor
                 return;
             }
 
-            if (!this.hasMovedEnough && (this.draggedNode || this.draggedWaypoint))
+            const hasDrag = this.draggedNode || this.draggedWaypoint || this.draggedGate || this.draggedGroup || this.draggedGroupResize || this.draggedWireWaypoint;
+            if (!this.hasMovedEnough && hasDrag)
             {
                 const dist = Math.sqrt((evt.clientX - this.dragStartPos.x) ** 2 + (evt.clientY - this.dragStartPos.y) ** 2);
-                if (dist < 3) return;
+                if (dist < 3)
+                {
+                    // Still allow wiring preview to update even below threshold
+                    if (this.wiringFrom && this.wiringPreviewLine)
+                    {
+                        const mp2 = this.getMousePosition(evt);
+                        this.wiringPreviewLine.setAttribute("x2", mp2.x.toString());
+                        this.wiringPreviewLine.setAttribute("y2", mp2.y.toString());
+                    }
+                    return;
+                }
                 this.hasMovedEnough = true;
             }
 
-            if (!this.draggedNode && !this.draggedWaypoint) return;
+            if (!hasDrag && !this.wiringFrom) return;
             evt.preventDefault();
             const mp = this.getMousePosition(evt);
+
+            // Group resize
+            if (this.draggedGroupResize && this.resizeStartSize && this.resizeStartMouse)
+            {
+                this.draggedGroupResize.w = Math.max(80, this.resizeStartSize.w + (mp.x - this.resizeStartMouse.x));
+                this.draggedGroupResize.h = Math.max(60, this.resizeStartSize.h + (mp.y - this.resizeStartMouse.y));
+                this.updateGroupPositions();
+                return;
+            }
+
+            // Group drag
+            if (this.draggedGroup)
+            {
+                this.draggedGroup.x = Math.round((mp.x - this.dragOffset.x) * 10) / 10;
+                this.draggedGroup.y = Math.round((mp.y - this.dragOffset.y) * 10) / 10;
+                this.updateGroupPositions();
+                return;
+            }
 
             if (this.draggedWaypoint)
             {
                 const { edge, wpId } = this.draggedWaypoint;
-                const wp = edge.waypoints?.find(w => w.id === wpId);
+                const wp = edge.waypoints?.find(w => w.id === (wpId ?? ""));
                 if (wp)
                 {
                     wp.x = Math.round(mp.x * 10) / 10;
@@ -1190,8 +1800,9 @@ export class SvgGraphEditor
                 {
                     if (edge.waypoints)
                     {
-                        const isSelf = edge.source === this.draggedNode!.id && edge.target === this.draggedNode!.id;
-                        const isConnected = edge.source === this.draggedNode!.id || edge.target === this.draggedNode!.id;
+                        const dragId = this.draggedNode?.id ?? "";
+                        const isSelf = edge.source === dragId && edge.target === dragId;
+                        const isConnected = edge.source === dragId || edge.target === dragId;
                         edge.waypoints.forEach(wp =>
                         {
                             if (isSelf)
@@ -1207,6 +1818,37 @@ export class SvgGraphEditor
                     }
                 });
                 this.updatePositions();
+            }
+
+            // Wire waypoint dragging
+            if (this.draggedWireWaypoint)
+            {
+                const { wire, wpId } = this.draggedWireWaypoint;
+                const wp = wire.waypoints?.find(w => w.id === wpId);
+                if (wp)
+                {
+                    wp.x = Math.round(mp.x * 10) / 10;
+                    wp.y = Math.round(mp.y * 10) / 10;
+                    this.updateGatePositions();
+                }
+                return;
+            }
+
+            // Gate dragging
+            if (this.draggedGate)
+            {
+                this.draggedGate.position = {
+                    x: Math.round((mp.x - this.dragOffset.x) * 10) / 10,
+                    y: Math.round((mp.y - this.dragOffset.y) * 10) / 10
+                };
+                this.updateGatePositions();
+            }
+
+            // Wiring preview
+            if (this.wiringFrom && this.wiringPreviewLine)
+            {
+                this.wiringPreviewLine.setAttribute("x2", mp.x.toString());
+                this.wiringPreviewLine.setAttribute("y2", mp.y.toString());
             }
         });
 
@@ -1229,6 +1871,33 @@ export class SvgGraphEditor
             if (this.draggedWaypoint)
             {
                 this.draggedWaypoint = null;
+                this.triggerSave(false);
+            }
+            if (this.draggedWireWaypoint)
+            {
+                this.draggedWireWaypoint = null;
+                this.triggerSave(false);
+            }
+            if (this.draggedGroup)
+            {
+                this.draggedGroup = null;
+                this.triggerSave(false);
+            }
+            if (this.draggedGroupResize)
+            {
+                this.draggedGroupResize = null;
+                this.resizeStartSize = null;
+                this.resizeStartMouse = null;
+                this.triggerSave(false);
+            }
+            if (this.draggedGate)
+            {
+                if (!this.hasMovedEnough && this.draggedGate.type === "INPUT")
+                {
+                    this.simulator.toggleInput(this.draggedGate.id);
+                    this.updateCircuitVisuals();
+                }
+                this.draggedGate = null;
                 this.triggerSave(false);
             }
         };
@@ -1273,8 +1942,7 @@ export class SvgGraphEditor
                     id: `e_${source}_${target}_${parsedEdges.length}`,
                     source,
                     target,
-                    label: labelMatch?.[1] ?? "",
-                    type: "arrow"
+                    label: labelMatch?.[1] ?? ""
                 });
                 return;
             }
@@ -1305,6 +1973,458 @@ export class SvgGraphEditor
         this.buildDOM();
         this.updatePositions();
         this.triggerSave();
+    }
+
+
+    // ─── GATE RENDERING ─────────────────────────────────────────────────────────
+
+    private buildGateDOM()
+    {
+        this.gateElements.clear();
+        this.wireElements.clear();
+
+        // Inject electricity animation style once
+        if (!this.svg.querySelector("#wire-anim-style"))
+        {
+            const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+            style.id = "wire-anim-style";
+            style.textContent = `
+                @keyframes wire-flow {
+                    from { stroke-dashoffset: 24; }
+                    to   { stroke-dashoffset: 0; }
+                }
+            `;
+            this.svg.appendChild(style);
+        }
+
+        // Draw wires first (under gates)
+        this.wires.forEach(wire =>
+        {
+            // Invisible hitbox for easier clicking
+            const hitbox = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            hitbox.setAttribute("fill", "none");
+            hitbox.setAttribute("stroke", "rgba(0,0,0,0.01)");
+            hitbox.setAttribute("stroke-width", "18");
+            hitbox.style.pointerEvents = "stroke";
+            hitbox.style.cursor = "pointer";
+            hitbox.dataset.wireId = wire.id;
+            this.svg.appendChild(hitbox);
+
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke-width", "2");
+            path.setAttribute("stroke-linecap", "round");
+            path.dataset.wireId = wire.id;
+            path.style.pointerEvents = "none";
+            this.svg.appendChild(path);
+
+            // Handle group for waypoints
+            const handles = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            handles.classList.add("wire-handles");
+            handles.setAttribute("opacity", wire.isBendable ? "0.8" : "0");
+            handles.style.transition = "opacity 0.15s";
+            handles.style.pointerEvents = wire.isBendable ? "all" : "none";
+            this.svg.appendChild(handles);
+
+            hitbox.addEventListener("mouseenter", () =>
+            {
+                if (wire.isBendable) handles.setAttribute("opacity", "1");
+            });
+            hitbox.addEventListener("mouseleave", () =>
+            {
+                handles.setAttribute("opacity", wire.isBendable ? "0.8" : "0");
+            });
+
+            this.wireElements.set(wire.id, path);
+        });
+
+        // Draw gates
+        this.gates.forEach(gate =>
+        {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            g.dataset.gateId = gate.id;
+            g.style.cursor = "grab";
+
+            // Gate body shape
+            const bodyPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            bodyPath.setAttribute("stroke-width", "2");
+            bodyPath.setAttribute("stroke-linecap", "round");
+            bodyPath.setAttribute("stroke-linejoin", "round");
+            g.appendChild(bodyPath);
+
+            // Type label (centered on gate body)
+            const typeLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            typeLabel.setAttribute("text-anchor", "middle");
+            typeLabel.setAttribute("dominant-baseline", "central");
+            typeLabel.setAttribute("font-size", "9");
+            typeLabel.setAttribute("font-weight", "600");
+            typeLabel.setAttribute("font-family", "var(--font-monospace, monospace)");
+            typeLabel.setAttribute("pointer-events", "none");
+            g.appendChild(typeLabel);
+
+            // User label (below gate body)
+            const userLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            userLabel.setAttribute("text-anchor", "middle");
+            userLabel.setAttribute("dominant-baseline", "auto");
+            userLabel.setAttribute("font-size", "10");
+            userLabel.setAttribute("font-family", "var(--font-sans, sans-serif)");
+            userLabel.setAttribute("pointer-events", "none");
+            g.appendChild(userLabel);
+
+            // Port circles
+            const ports = getPortPositions(gate.type);
+            Object.entries(ports).forEach(([portName, localPos]) =>
+            {
+                const portEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                portEl.setAttribute("r", "5");
+                portEl.setAttribute("cx", localPos.x.toString());
+                portEl.setAttribute("cy", localPos.y.toString());
+                portEl.setAttribute("stroke-width", "1.5");
+                portEl.style.cursor = portName === "out" ? "crosshair" : "cell";
+                portEl.dataset.gateId = gate.id;
+                portEl.dataset.gatePort = portName;
+
+                portEl.addEventListener("mouseenter", () =>
+                {
+                    portEl.setAttribute("r", "7");
+                });
+                portEl.addEventListener("mouseleave", () =>
+                {
+                    portEl.setAttribute("r", "5");
+                });
+                g.appendChild(portEl);
+            });
+
+            this.svg.appendChild(g);
+            this.gateElements.set(gate.id, g);
+        });
+
+        this.updateGatePositions();
+    }
+
+    private updateGatePositions()
+    {
+        const stroke = this.theme.gateStroke || this.theme.nodeStroke || "var(--text-normal)";
+        const fill = this.theme.gateFill || this.theme.nodeFill || "var(--background-secondary)";
+        const txt = this.theme.text || "var(--text-normal)";
+        const activeWireColor = this.theme.wireActive || "#facc15";
+
+        this.gates.forEach(gate =>
+        {
+            const g = this.gateElements.get(gate.id);
+            if (!g) return;
+            g.setAttribute("transform", `translate(${gate.position.x}, ${gate.position.y})`);
+
+            const active = this.simulator.getGateValue(gate.id);
+            const gateFill = gate.type === "INPUT"
+                ? (active ? "#22c55e" : fill)
+                : gate.type === "OUTPUT"
+                    ? (active ? "#22c55e" : fill)
+                    : fill;
+
+            const bodyPath = g.querySelector("path") as SVGPathElement;
+            if (bodyPath)
+            {
+                bodyPath.setAttribute("d", this.getGateShape(gate.type));
+                bodyPath.setAttribute("fill", gateFill);
+                bodyPath.setAttribute("stroke", stroke);
+            }
+
+            // Two text elements: typeLabel (body center) and userLabel (below)
+            const allTexts = Array.from(g.querySelectorAll("text")) as SVGTextElement[];
+            const typeLabel = allTexts[0];
+            const userLabel = allTexts[1];
+
+            if (typeLabel)
+            {
+                typeLabel.setAttribute("x", "0");
+                typeLabel.setAttribute("y", "0");
+                typeLabel.setAttribute("fill", active ? "#fff" : txt);
+                if (gate.type === "INPUT" || gate.type === "OUTPUT")
+                {
+                    // Show value inside input/output shape
+                    typeLabel.setAttribute("font-size", "11");
+                    typeLabel.textContent = active ? "1" : "0";
+                } else
+                {
+                    typeLabel.setAttribute("font-size", "9");
+                    typeLabel.textContent = gate.type;
+                }
+            }
+            if (userLabel)
+            {
+                userLabel.setAttribute("x", "0");
+                userLabel.setAttribute("y", (GATE_SIZE.h / 2 + 13).toString());
+                userLabel.setAttribute("fill", txt);
+                userLabel.setAttribute("font-size", "10");
+                const hasCustomLabel = gate.label !== undefined && gate.label !== "";
+                userLabel.textContent = hasCustomLabel ? gate.label ?? "" : "";
+            }
+
+            // Update port colors
+            const portEls = g.querySelectorAll("circle[data-gate-port]");
+            portEls.forEach((el) =>
+            {
+                const portEl = el as SVGCircleElement;
+                const portName = portEl.dataset.gatePort ?? "";
+                const isOut = portName === "out";
+                const portActive = isOut
+                    ? active
+                    : this.simulator.getPortValue(gate.id, portName);
+                portEl.setAttribute("fill", portActive ? "#22c55e" : fill);
+                portEl.setAttribute("stroke", portActive ? "#16a34a" : stroke);
+            });
+        });
+
+        // Update wire paths and colors
+        this.wires.forEach(wire =>
+        {
+            const pathEl = this.wireElements.get(wire.id);
+            if (!pathEl) return;
+            const fromGate = this.gates.find(g => g.id === wire.fromGate);
+            const toGate = this.gates.find(g => g.id === wire.toGate);
+            if (!fromGate || !toGate) return;
+
+            const fromPorts = getPortPositions(fromGate.type);
+            const toPorts = getPortPositions(toGate.type);
+            const fp = fromPorts[wire.fromPort];
+            const tp = toPorts[wire.toPort];
+
+            if (!fp || !tp) return;
+
+            const x1 = fromGate.position.x + fp.x;
+            const y1 = fromGate.position.y + fp.y;
+            const x2 = toGate.position.x + tp.x;
+            const y2 = toGate.position.y + tp.y;
+
+            // Build path: use waypoints if present, else default cubic bezier
+            let wirePath: string;
+            if (wire.waypoints && wire.waypoints.length > 0)
+            {
+                const wps = wire.waypoints;
+                let p = `M ${x1} ${y1}`;
+                if (wps.length === 1)
+                {
+                    const cp = wps[0];
+                    const cx = 2 * cp.x - 0.5 * x1 - 0.5 * x2;
+                    const cy = 2 * cp.y - 0.5 * y1 - 0.5 * y2;
+                    p += ` Q ${cx} ${cy} ${x2} ${y2}`;
+                } else
+                {
+                    wps.forEach((wp, i) =>
+                    {
+                        if (wp.type === "linear")
+                        {
+                            p += ` L ${wp.x} ${wp.y}`;
+                        } else
+                        {
+                            const next = wps[i + 1];
+                            const tx = next ? (next.type === "bezier" ? (wp.x + next.x) / 2 : next.x) : x2;
+                            const ty = next ? (next.type === "bezier" ? (wp.y + next.y) / 2 : next.y) : y2;
+                            p += ` Q ${wp.x} ${wp.y} ${tx} ${ty}`;
+                        }
+                    });
+                    if (wps[wps.length - 1].type !== "bezier") p += ` L ${x2} ${y2}`;
+                }
+                wirePath = p;
+            } else
+            {
+                wirePath = `M ${x1} ${y1} C ${x1 + 40} ${y1}, ${x2 - 40} ${y2}, ${x2} ${y2}`;
+            }
+
+            // Sync hitbox (element before the visible path)
+            const hitboxEl = pathEl.previousElementSibling as SVGPathElement;
+            if (hitboxEl?.dataset.wireId === wire.id)
+            {
+                hitboxEl.setAttribute("d", wirePath);
+            }
+            pathEl.setAttribute("d", wirePath);
+
+            const active = this.simulator.getWireValue(wire);
+            pathEl.setAttribute("stroke", active ? activeWireColor : (this.theme.edgeStroke || "var(--text-muted)"));
+            pathEl.setAttribute("stroke-width", active ? "2.5" : "2");
+            if (active)
+            {
+                pathEl.classList.add("automaton-wire-active");
+            } else
+            {
+                pathEl.classList.remove("automaton-wire-active");
+            }
+
+            // Draw waypoint handles if wire is bendable
+            const handleGroup = pathEl.nextElementSibling as SVGGElement;
+            if (handleGroup && handleGroup.classList.contains("wire-handles"))
+            {
+                handleGroup.innerHTML = "";
+                handleGroup.style.pointerEvents = wire.isBendable ? "all" : "none";
+                if (wire.isBendable && wire.waypoints)
+                {
+                    wire.waypoints.forEach(wp =>
+                    {
+                        const circ = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                        circ.setAttribute("cx", wp.x.toString());
+                        circ.setAttribute("cy", wp.y.toString());
+                        circ.setAttribute("r", "6");
+                        circ.setAttribute("fill", wp.type === "bezier" ? "var(--interactive-accent)" : "#d97706");
+                        circ.setAttribute("stroke", "var(--background-primary)");
+                        circ.setAttribute("stroke-width", "1.5");
+                        circ.setAttribute("opacity", "0.7");
+                        circ.dataset.wireWpId = wp.id;
+                        circ.dataset.wireId = wire.id;
+                        circ.style.cursor = "grab";
+                        handleGroup.appendChild(circ);
+                    });
+                }
+            }
+        });
+    }
+
+    private updateCircuitVisuals()
+    {
+        this.simulator.propagate();
+        this.updateGatePositions();
+    }
+
+    // IEEE gate shapes in local coords centered at 0,0
+    private getGateShape(type: GateType): string
+    {
+        const { w, h } = GATE_SIZE;
+        const hw = w / 2;
+        const hh = h / 2;
+
+        switch (type)
+        {
+            case "AND":
+                return `M ${-hw} ${-hh} L ${0} ${-hh} Q ${hw} ${-hh} ${hw} ${0} Q ${hw} ${hh} ${0} ${hh} L ${-hw} ${hh} Z`;
+            case "NAND":
+                return `M ${-hw} ${-hh} L ${0} ${-hh} Q ${hw - 6} ${-hh} ${hw - 6} ${0} Q ${hw - 6} ${hh} ${0} ${hh} L ${-hw} ${hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
+            case "OR":
+                return `M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh} Q ${0} ${hh} ${hw} ${0} Q ${0} ${-hh} ${-hw} ${-hh} Z`;
+            case "NOR":
+                return `M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh} Q ${0} ${hh} ${hw - 6} ${0} Q ${0} ${-hh} ${-hw} ${-hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
+            case "XOR":
+                return `M ${-hw + 4} ${-hh} Q ${-hw + 12} 0 ${-hw + 4} ${hh} Q ${0} ${hh} ${hw} ${0} Q ${0} ${-hh} ${-hw + 4} ${-hh} Z M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh}`;
+            case "XNOR":
+                return `M ${-hw + 4} ${-hh} Q ${-hw + 12} 0 ${-hw + 4} ${hh} Q ${0} ${hh} ${hw - 6} ${0} Q ${0} ${-hh} ${-hw + 4} ${-hh} Z M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh} M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
+            case "NOT":
+                return `M ${-hw} ${-hh} L ${-hw} ${hh} L ${hw - 6} ${0} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
+            case "INPUT":
+                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.6} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.6} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
+            case "OUTPUT":
+                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.4} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.4} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
+            default:
+                return `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z`;
+        }
+    }
+
+    // ─── WIRING PREVIEW ─────────────────────────────────────────────────────────
+
+    private startWiringPreview(from: { x: number; y: number })
+    {
+        if (this.wiringPreviewLine) this.wiringPreviewLine.remove();
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", from.x.toString());
+        line.setAttribute("y1", from.y.toString());
+        line.setAttribute("x2", from.x.toString());
+        line.setAttribute("y2", from.y.toString());
+        line.setAttribute("stroke", "var(--interactive-accent)");
+        line.setAttribute("stroke-width", "2");
+        line.setAttribute("stroke-dasharray", "6 3");
+        line.setAttribute("pointer-events", "none");
+        this.svg.appendChild(line);
+        this.wiringPreviewLine = line;
+    }
+
+    private cancelWiring()
+    {
+        this.wiringFrom = null;
+        this.wiringPreviewLine?.remove();
+        this.wiringPreviewLine = null;
+        this.svg.style.cursor = "grab";
+    }
+
+    // ─── TRUTH TABLE MODAL ──────────────────────────────────────────────────────
+
+    private showTruthTableModal()
+    {
+        const result = this.simulator.generateTruthTable();
+
+        const overlay = document.createElement("div");
+        overlay.addClass("automaton-modal-overlay");
+        const modal = document.createElement("div");
+        modal.addClass("automaton-modal-box");
+        modal.style.minWidth = "320px";
+        modal.style.maxWidth = "600px";
+        modal.createEl("h3", { text: "Truth table", cls: "automaton-modal-title" });
+
+        if (!result)
+        {
+            modal.createEl("p", {
+                text: "Add at least one INPUT and one OUTPUT gate to generate a truth table.",
+                cls: "automaton-modal-textarea"
+            });
+        } else
+        {
+            const table = document.createElement("table");
+            table.addClass("automaton-truth-table");
+
+            const thead = table.createEl("thead");
+            const headerRow = thead.createEl("tr");
+            result.headers.forEach((h, i) =>
+            {
+                const th = headerRow.createEl("th", { text: h });
+                if (i >= result.headers.length - result.rows[0].length + result.rows[0].length - (result.headers.length - (result.rows[0].length - result.headers.length + result.headers.length)))
+                {
+                    th.style.borderLeft = "2px solid var(--background-modifier-border)";
+                }
+            });
+
+            // Recount: inputs = headers minus outputs
+            const inputCount = this.gates.filter(g => g.type === "INPUT").length;
+            Array.from(headerRow.querySelectorAll("th")).forEach((th, i) =>
+            {
+                if (i === inputCount) th.style.borderLeft = "2px solid var(--background-modifier-border)";
+            });
+
+            const tbody = table.createEl("tbody");
+            result.rows.forEach(row =>
+            {
+                const tr = tbody.createEl("tr");
+                row.forEach((val, i) =>
+                {
+                    const td = tr.createEl("td", { text: val.toString() });
+                    td.style.textAlign = "center";
+                    td.style.padding = "4px 12px";
+                    td.style.color = val === 1 ? "var(--color-green)" : "var(--text-muted)";
+                    if (i === inputCount) td.style.borderLeft = "2px solid var(--background-modifier-border)";
+                });
+            });
+
+            modal.appendChild(table);
+
+            // Copy as markdown button
+            const copyBtn = modal.createEl("button", { text: "Copy as markdown", cls: "automaton-modal-button" });
+            copyBtn.style.marginTop = "12px";
+            copyBtn.onclick = () =>
+            {
+                const header = "| " + result.headers.join(" | ") + " |";
+                const sep = "| " + result.headers.map(() => "---").join(" | ") + " |";
+                const rows = result.rows.map(r => "| " + r.join(" | ") + " |").join("\n");
+                navigator.clipboard.writeText(header + "\n" + sep + "\n" + rows);
+                copyBtn.textContent = "Copied!";
+                setTimeout(() => copyBtn.textContent = "Copy as markdown", 1500);
+            };
+        }
+
+        const closeBtn = modal.createEl("button", {
+            text: "Close",
+            cls: "automaton-modal-button automaton-modal-button-primary"
+        });
+        closeBtn.style.marginTop = "8px";
+        closeBtn.onclick = () => overlay.remove();
+
+        overlay.appendChild(modal);
+        this.container.appendChild(overlay);
     }
 
     // ─── CLEANUP ────────────────────────────────────────────────────────────────

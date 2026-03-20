@@ -39,3 +39,14 @@ export interface GraphViewport
     height: number;
     viewBox: { x: number, y: number, w: number, h: number };
 }
+
+export interface GraphGroup
+{
+    id: string;
+    label?: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    color?: string;
+}

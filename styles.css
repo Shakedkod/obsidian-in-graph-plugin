@@ -298,6 +298,108 @@ path[stroke="rgba(0,0,0,0.01)"]
     stroke-linecap: butt !important;
 }
 
+@keyframes automaton-pulse
+{
+    0%, 100%
+    { transform: scale(1); opacity: 1; }
+    50%
+    { transform: scale(1.35); opacity: 0.7; }
+}
+
+/* Settings preview area */
+.automaton-settings-preview-wrap
+{
+    margin: 12px 0 20px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.automaton-settings-preview-label
+{
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 6px 12px;
+    margin: 0;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.automaton-settings-preview
+{
+    padding: 8px;
+}
+
+/* Custom theme section */
+.automaton-custom-theme-section
+{
+    border-top: 1px solid var(--background-modifier-border);
+    margin-top: 8px;
+    padding-top: 8px;
+}
+
+.automaton-context-menu-item:hover
+{
+    background: var(--background-modifier-hover);
+}
+
+.automaton-context-menu-item-error
+{
+    color: var(--text-error) !important;
+}
+
+.automaton-context-menu-item-error:hover
+{
+    background: rgba(var(--color-red-rgb, 220, 38, 38), 0.1) !important;
+}
+
+.automaton-context-menu-accent
+{
+    color: var(--interactive-accent) !important;
+}
+
+.automaton-context-menu-divider
+{
+    height: 1px;
+    background: var(--background-modifier-border);
+    margin: 3px 0;
+}
+
+.automaton-color-picker-wrapper
+{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    font-size: 13px;
+    color: var(--text-muted);
+    gap: 8px;
+}
+
+.automaton-color-picker-input
+{
+    width: 28px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: none;
+}
+
+/* Link button on node hover */
+.automaton-link-btn
+{
+    transition: opacity 0.15s;
+}
+
+.automaton-link-btn:hover circle
+{
+    filter: brightness(1.15);
+}
+
 /* Unsaved dot — subtle pulse, fades out on save */
 .automaton-unsaved-dot
 {
@@ -445,4 +547,130 @@ path[stroke="rgba(0,0,0,0.01)"]
 .automaton-link-btn:hover circle
 {
     filter: brightness(1.15);
+}
+
+/* ─── TRUTH TABLE ─── */
+.automaton-truth-table
+{
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+    font-family: var(--font-monospace);
+    margin-bottom: 8px;
+}
+
+.automaton-truth-table th
+{
+    padding: 6px 12px;
+    text-align: center;
+    background: var(--background-secondary);
+    border-bottom: 2px solid var(--background-modifier-border);
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.automaton-truth-table tr:nth-child(even) td
+{
+    background: var(--background-secondary);
+}
+
+.automaton-truth-table td, .automaton-truth-table th
+{
+    border: none;
+}
+
+/* ─── GATE PORT HOVER ─── */
+circle[data-gate-port]
+{
+    transition: r 0.1s;
+}
+
+/* ─── SUBMENU ─── */
+.automaton-context-submenu-wrapper
+{
+    position: relative;
+}
+
+.automaton-context-submenu-trigger::after
+{
+    content: "›";
+    position: absolute;
+    right: 10px;
+}
+
+.automaton-context-submenu
+{
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: 0;
+    min-width: 130px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+    padding: 4px;
+    z-index: 10000;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.automaton-context-submenu-wrapper:hover .automaton-context-submenu
+{
+    display: flex;
+}
+
+/* ─── TRUTH TABLE ─── */
+.automaton-truth-table
+{
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+    font-family: var(--font-monospace);
+    margin-bottom: 8px;
+}
+
+.automaton-truth-table th
+{
+    padding: 6px 12px;
+    text-align: center;
+    background: var(--background-secondary);
+    border-bottom: 2px solid var(--background-modifier-border);
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.automaton-truth-table tr:nth-child(even) td
+{
+    background: var(--background-secondary);
+}
+
+.automaton-truth-table td,
+.automaton-truth-table th
+{
+    border: none;
+}
+
+/* ─── WIRE ELECTRICITY ANIMATION ─── */
+/* (also injected inline into SVG for the animation to work inside the SVG context) */
+@keyframes wire-flow
+{
+    from
+    { stroke-dashoffset: 24; }
+    to
+    { stroke-dashoffset: 0; }
+}
+
+.automaton-wire-active
+{
+    stroke: #facc15 !important;
+    stroke-dasharray: 10 6;
+    animation: wire-flow 0.35s linear infinite;
+    filter: drop-shadow(0 0 3px #facc15);
+}
+
+/* ─── GATE PORT HOVER ─── */
+circle[data-gate-port]
+{
+    transition: r 0.1s;
 }
