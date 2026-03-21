@@ -17,17 +17,18 @@ import { InGraphSettingTab } from "./ui/settings";
 *   TODO
 */
 
-interface GraphRecord
+interface GraphRecord 
 {
-    nodes: GraphNode[];
-    edges: GraphEdge[];
-    gates?: CircuitGate[];
-    wires?: CircuitWire[];
-    groups?: GraphGroup[];
-    theme?: GraphTheme;
-    viewport?: GraphViewport;
+    nodes: any[];
+    edges: any[];
+    gates: any[];
+    wires: any[];
+    groups: any[];
+    theme: any;
+    viewport: any;
     lineStart: number;
     linePrefix: string;
+    editor?: SvgGraphEditor;
 }
 
 export default class InGraphPlugin extends Plugin
@@ -133,7 +134,7 @@ export default class InGraphPlugin extends Plugin
             const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix };
             this.activeGraphs.set(blockId, record);
 
-            const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], savedTheme?: GraphTheme,
+            const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], _savedTheme?: GraphTheme,
                                   savedViewport?: GraphViewport, savedGates?: CircuitGate[], savedWires?: CircuitWire[],
                                   savedGroups?: GraphGroup[]) =>
             {
@@ -142,7 +143,6 @@ export default class InGraphPlugin extends Plugin
                 record.gates = savedGates ?? record.gates;
                 record.wires = savedWires ?? record.wires;
                 record.groups = savedGroups ?? record.groups;
-                record.theme = savedTheme;
                 record.viewport = savedViewport;
             };
 
@@ -153,6 +153,7 @@ export default class InGraphPlugin extends Plugin
                 onSave,
                 () => this.batchSaveToFile()
             );
+            record.editor = editor;
 
             const listenerComponent = new MarkdownRenderChild(el);
             const handleKeyDown = (e: KeyboardEvent) =>
@@ -273,5 +274,15 @@ export default class InGraphPlugin extends Plugin
     async saveSettings(): Promise<void>
     {
         await this.saveData(this.settings);
+        this.refreshAllGraphThemes();
+    }
+
+    private refreshAllGraphThemes() 
+    {
+        for (const [, record] of this.activeGraphs) {
+            if (!record.editor) continue;
+            const newTheme = this.getResolvedTheme(record.theme);
+            record.editor.applyTheme(newTheme);
+        }
     }
 }

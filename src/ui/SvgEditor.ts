@@ -747,7 +747,7 @@ export class SvgGraphEditor
             circle.setAttribute("cx", "0");
             circle.setAttribute("cy", "0");
             circle.setAttribute("r", "25");
-            circle.setAttribute("stroke", nodeColor);
+            circle.setAttribute("stroke", node.isAccepting ? (this.theme.acceptCircle || nodeColor) : nodeColor);
             circle.setAttribute("fill", this.theme.nodeFill || "var(--background-primary)");
             circle.setAttribute("stroke-width", "2");
             group.appendChild(circle);
@@ -1262,8 +1262,29 @@ export class SvgGraphEditor
                 }
             }
 
+            const wireWpCtx = target.closest("circle[data-wire-wp-id]") as SVGCircleElement;
+            if (wireWpCtx && !gateGroupCtx && !nodeGroup && !edgeGroup) {
+                const wId  = wireWpCtx.dataset.wireId  ?? '';
+                const wpId = wireWpCtx.dataset.wireWpId ?? '';
+                const wire = this.wires.find(w => w.id === wId);
+                const wp   = wire?.waypoints?.find(w => w.id === wpId);
+            
+                if (wire && wp) {
+                    this.addMenuItem(wp.type === 'bezier' ? "Change to linear" : "Change to bezier", () => {
+                        wp.type = wp.type === 'bezier' ? 'linear' : 'bezier';
+                        this.buildDOM(); this.updatePositions(); this.triggerSave();
+                    });
+                    this.addDivider();
+                    this.addMenuItem("Delete point", () => {
+                        wire.waypoints = wire.waypoints?.filter(w => w.id !== wpId);
+                        if (!wire.waypoints?.length) delete wire.waypoints;
+                        this.buildDOM(); this.updatePositions(); this.triggerSave();
+                    }, "danger");
+                }
+            }
+
             // WIRE SECTION
-            else if (!gateGroupCtx && !nodeGroup && !edgeGroup)
+            if (!gateGroupCtx && !nodeGroup && !edgeGroup)
             {
                 // Match either the hitbox (direct target) or visible path
                 const wireEl = (
@@ -1989,9 +2010,9 @@ export class SvgGraphEditor
             const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
             style.id = "wire-anim-style";
             style.textContent = `
-                @keyframes wire-flow {
-                    from { stroke-dashoffset: 24; }
-                    to   { stroke-dashoffset: 0; }
+                .automaton-wire-active {
+                    stroke-dasharray: 10 6;
+                    animation: wire-flow 0.4s linear infinite;
                 }
             `;
             this.svg.appendChild(style);
@@ -2139,7 +2160,7 @@ export class SvgGraphEditor
             {
                 typeLabel.setAttribute("x", "0");
                 typeLabel.setAttribute("y", "0");
-                typeLabel.setAttribute("fill", active ? "#fff" : txt);
+                typeLabel.setAttribute("fill", txt);
                 if (gate.type === "INPUT" || gate.type === "OUTPUT")
                 {
                     // Show value inside input/output shape
@@ -2286,36 +2307,91 @@ export class SvgGraphEditor
     }
 
     // IEEE gate shapes in local coords centered at 0,0
-    private getGateShape(type: GateType): string
-    {
-        const { w, h } = GATE_SIZE;
-        const hw = w / 2;
-        const hh = h / 2;
+    private getGateShape(type: GateType): string {
+    const { w, h } = GATE_SIZE;  // w=54, h=40
+    const hw = w / 2, hh = h / 2;
 
-        switch (type)
-        {
-            case "AND":
-                return `M ${-hw} ${-hh} L ${0} ${-hh} Q ${hw} ${-hh} ${hw} ${0} Q ${hw} ${hh} ${0} ${hh} L ${-hw} ${hh} Z`;
-            case "NAND":
-                return `M ${-hw} ${-hh} L ${0} ${-hh} Q ${hw - 6} ${-hh} ${hw - 6} ${0} Q ${hw - 6} ${hh} ${0} ${hh} L ${-hw} ${hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
-            case "OR":
-                return `M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh} Q ${0} ${hh} ${hw} ${0} Q ${0} ${-hh} ${-hw} ${-hh} Z`;
-            case "NOR":
-                return `M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh} Q ${0} ${hh} ${hw - 6} ${0} Q ${0} ${-hh} ${-hw} ${-hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
-            case "XOR":
-                return `M ${-hw + 4} ${-hh} Q ${-hw + 12} 0 ${-hw + 4} ${hh} Q ${0} ${hh} ${hw} ${0} Q ${0} ${-hh} ${-hw + 4} ${-hh} Z M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh}`;
-            case "XNOR":
-                return `M ${-hw + 4} ${-hh} Q ${-hw + 12} 0 ${-hw + 4} ${hh} Q ${0} ${hh} ${hw - 6} ${0} Q ${0} ${-hh} ${-hw + 4} ${-hh} Z M ${-hw} ${-hh} Q ${-hw + 8} 0 ${-hw} ${hh} M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
-            case "NOT":
-                return `M ${-hw} ${-hh} L ${-hw} ${hh} L ${hw - 6} ${0} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`;
-            case "INPUT":
-                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.6} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.6} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
-            case "OUTPUT":
-                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.4} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.4} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
-            default:
-                return `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z`;
-        }
+    switch (type) {
+        case 'AND':
+            return [
+                `M ${-hw} ${-hh}`,
+                `L ${0} ${-hh}`,
+                `C ${hw + 4} ${-hh} ${hw + 4} ${hh} ${0} ${hh}`,  // control points pushed out so curve peaks at hw
+                `L ${-hw} ${hh}`,
+                `Z`,
+            ].join(' ');
+        
+        case 'NAND':
+            return [
+                `M ${-hw} ${-hh}`,
+                `L ${0} ${-hh}`,
+                `C ${hw - 1} ${-hh} ${hw - 1} ${hh} ${0} ${hh}`,
+                `L ${-hw} ${hh}`,
+                `Z`,
+                `M ${hw} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+            ].join(' ');
+
+        case 'OR':
+            return [
+                `M ${-hw} ${-hh}`,
+                `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,   // top: flat-ish top sweeping to tip
+                `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,   // bottom: tip back to bottom-left
+                `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,  // concave left
+                `Z`,
+            ].join(' ');
+        
+        case 'NOR':
+            return [
+                `M ${-hw} ${-hh}`,
+                `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
+                `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,
+                `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,
+                `Z`,
+                `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+            ].join(' ');
+        
+        case 'XOR':
+            return [
+                `M ${-hw + 4} ${-hh}`,
+                `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,
+                `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
+                `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
+                `Z`,
+                // extra back line offset to the left
+                `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
+            ].join(' ');
+        
+        case 'XNOR':
+            return [
+                `M ${-hw + 4} ${-hh}`,
+                `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
+                `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
+                `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
+                `Z`,
+                `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
+                `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+            ].join(' ');
+
+        case 'NOT':
+            // Triangle pointing right + bubble
+            return [
+                `M ${-hw} ${-hh}`,
+                `L ${-hw} ${hh}`,
+                `L ${hw - 6} ${0}`,
+                `Z`,
+                `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+            ].join(' ');
+
+        case 'INPUT':
+            return `M ${-hw} ${-hh*0.7} L ${hw*0.6} ${-hh*0.7} L ${hw} 0 L ${hw*0.6} ${hh*0.7} L ${-hw} ${hh*0.7} Z`;
+
+        case 'OUTPUT':
+            return `M ${-hw} ${-hh*0.7} L ${hw*0.4} ${-hh*0.7} L ${hw} 0 L ${hw*0.4} ${hh*0.7} L ${-hw} ${hh*0.7} Z`;
+
+        default:
+            return `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z`;
     }
+}
 
     // ─── WIRING PREVIEW ─────────────────────────────────────────────────────────
 
@@ -2425,6 +2501,12 @@ export class SvgGraphEditor
 
         overlay.appendChild(modal);
         this.container.appendChild(overlay);
+    }
+
+    public applyTheme(newTheme: GraphTheme) {
+        this.theme = { ...DEFAULT_THEME, ...newTheme };
+        this.buildDOM();
+        this.updatePositions();
     }
 
     // ─── CLEANUP ────────────────────────────────────────────────────────────────

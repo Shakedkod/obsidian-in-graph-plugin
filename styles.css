@@ -465,8 +465,6 @@ path[stroke="rgba(0,0,0,0.01)"]
     display: none;
     flex-direction: column;
     min-width: 170px;
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
     padding: 4px;
@@ -481,7 +479,6 @@ path[stroke="rgba(0,0,0,0.01)"]
     padding: 6px 10px;
     border: none;
     background: transparent;
-    color: var(--text-normal);
     font-size: 13px;
     text-align: left;
     border-radius: 5px;
@@ -491,28 +488,28 @@ path[stroke="rgba(0,0,0,0.01)"]
 
 .automaton-context-menu-item:hover
 {
-    background: var(--background-modifier-hover);
+    
 }
 
 .automaton-context-menu-item-error
 {
-    color: var(--text-error) !important;
+    
 }
 
 .automaton-context-menu-item-error:hover
 {
-    background: rgba(var(--color-red-rgb, 220, 38, 38), 0.1) !important;
+    
 }
 
 .automaton-context-menu-accent
 {
-    color: var(--interactive-accent) !important;
+    
 }
 
 .automaton-context-menu-divider
 {
     height: 1px;
-    background: var(--background-modifier-border);
+    
     margin: 3px 0;
 }
 
@@ -523,7 +520,6 @@ path[stroke="rgba(0,0,0,0.01)"]
     justify-content: space-between;
     padding: 5px 10px;
     font-size: 13px;
-    color: var(--text-muted);
     gap: 8px;
 }
 
@@ -532,7 +528,7 @@ path[stroke="rgba(0,0,0,0.01)"]
     width: 28px;
     height: 20px;
     padding: 0;
-    border: 1px solid var(--background-modifier-border);
+    border: 1px solid;
     border-radius: 4px;
     cursor: pointer;
     background: none;
@@ -563,15 +559,13 @@ path[stroke="rgba(0,0,0,0.01)"]
 {
     padding: 6px 12px;
     text-align: center;
-    background: var(--background-secondary);
-    border-bottom: 2px solid var(--background-modifier-border);
+    border-bottom: 2px solid;
     font-weight: 600;
     color: var(--text-normal);
 }
 
 .automaton-truth-table tr:nth-child(even) td
 {
-    background: var(--background-secondary);
 }
 
 .automaton-truth-table td, .automaton-truth-table th
@@ -605,8 +599,6 @@ circle[data-gate-port]
     left: 100%;
     top: 0;
     min-width: 130px;
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
     padding: 4px;
@@ -634,15 +626,12 @@ circle[data-gate-port]
 {
     padding: 6px 12px;
     text-align: center;
-    background: var(--background-secondary);
-    border-bottom: 2px solid var(--background-modifier-border);
     font-weight: 600;
     color: var(--text-normal);
 }
 
 .automaton-truth-table tr:nth-child(even) td
 {
-    background: var(--background-secondary);
 }
 
 .automaton-truth-table td,
@@ -652,13 +641,10 @@ circle[data-gate-port]
 }
 
 /* ─── WIRE ELECTRICITY ANIMATION ─── */
-/* (also injected inline into SVG for the animation to work inside the SVG context) */
-@keyframes wire-flow
+@keyframes wire-flow 
 {
-    from
-    { stroke-dashoffset: 24; }
-    to
-    { stroke-dashoffset: 0; }
+    from { stroke-dashoffset: 0; }
+    to { stroke-dashoffset: -16; }
 }
 
 .automaton-wire-active
