@@ -3,9 +3,9 @@ import { GraphEdge, GraphGroup, GraphNode, GraphViewport, Position } from "../mo
 import { DEFAULT_THEME, GraphTheme } from "../models/theme";
 import { CircuitGate, CircuitWire, GATE_SIZE, GateType } from "../models/circuits";
 import { CircuitSimulator, getPortPositions } from "../services/circuitSimulator";
+import { ParserOutput } from "src/models/parser";
 
-export class SvgGraphEditor
-{
+export class SvgGraphEditor {
     static persistedMode = "none";
 
     container: HTMLElement;
@@ -13,6 +13,7 @@ export class SvgGraphEditor
 
     private contextMenu: HTMLDivElement;
     private unsavedDot: HTMLDivElement;
+    private svgWrapper: HTMLDivElement;
 
     private viewBox = { x: 0, y: 0, w: 800, h: 500 };
     private isPanning = false;
@@ -66,6 +67,10 @@ export class SvgGraphEditor
     private linkButton: SVGGElement | null = null;
     private hoveredNodeId: string | null = null;
 
+    // Writing Mode
+    private writingPanel: HTMLDivElement | null = null;
+    private writingTextarea: HTMLTextAreaElement | null = null;
+
     private onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void;
     private onManualSave: () => void;
 
@@ -80,8 +85,7 @@ export class SvgGraphEditor
         userTheme: GraphTheme | undefined,
         onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void,
         onManualSave: () => void
-    )
-    {
+    ) {
         this.container = container;
         this.container.addClass("automaton-graph-container");
 
@@ -101,17 +105,20 @@ export class SvgGraphEditor
 
         this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         this.svg.classList.add("automaton-svg-canvas");
-        this.container.appendChild(this.svg);
+        this.svgWrapper = document.createElement("div");
+        this.svgWrapper.style.flex = "1";
+        this.svgWrapper.style.minHeight = "0";
+        this.svgWrapper.style.position = "relative";
 
-        if (initialViewport?.viewBox)
-        {
+        this.svgWrapper.appendChild(this.svg);
+        this.container.appendChild(this.svgWrapper);
+
+        if (initialViewport?.viewBox) {
             this.viewBox = { ...initialViewport.viewBox };
-            if (this.viewBox.h > 10000 || this.viewBox.w > 10000 || this.viewBox.h < 10)
-            {
+            if (this.viewBox.h > 10000 || this.viewBox.w > 10000 || this.viewBox.h < 10) {
                 this.viewBox = { x: 0, y: 0, w: 800, h: initHeight };
             }
-        } else
-        {
+        } else {
             this.viewBox = { x: 0, y: 0, w: 800, h: initHeight };
         }
         this.updateViewBox();
@@ -127,23 +134,19 @@ export class SvgGraphEditor
 
     // ─── SAVE ───────────────────────────────────────────────────────────────────
 
-    private getContentViewBox(pad = 50): { x: number; y: number; w: number; h: number }
-    {
+    private getContentViewBox(pad = 50): { x: number; y: number; w: number; h: number } {
         const xs: number[] = [];
         const ys: number[] = [];
 
-        this.nodes.forEach(n =>
-        {
+        this.nodes.forEach(n => {
             xs.push(n.position.x - 35, n.position.x + 35);
             ys.push(n.position.y - 35, n.position.y + 35);
         });
-        this.gates.forEach(g =>
-        {
+        this.gates.forEach(g => {
             xs.push(g.position.x - 35, g.position.x + 35);
             ys.push(g.position.y - 30, g.position.y + 40);
         });
-        this.groups.forEach(g =>
-        {
+        this.groups.forEach(g => {
             xs.push(g.x, g.x + g.w);
             ys.push(g.y - 14, g.y + g.h);
         });
@@ -163,8 +166,7 @@ export class SvgGraphEditor
         y: number;
         w: number;
         h: number
-    }
-    {
+    } {
         const content = this.getContentViewBox(20);
         return {
             x: Math.min(vb.x, content.x),
@@ -174,40 +176,34 @@ export class SvgGraphEditor
         };
     }
 
-    private triggerSave(forceFileWrite = false)
-    {
+    private triggerSave(forceFileWrite = false) {
         const h = Math.max(100, this.container.clientHeight || parseInt(this.container.style.height) || 300);
         // Save the user's current view, but expanded to never clip content
         const savedViewBox = this.clampViewBoxToContent({ ...this.viewBox });
         const currentViewport: GraphViewport = { height: h, viewBox: savedViewBox };
 
-        if (forceFileWrite)
-        {
+        if (forceFileWrite) {
             (this.onSave as (n: GraphNode[], e: GraphEdge[], t?: GraphTheme, v?: GraphViewport, g?: CircuitGate[],
-                             w?: CircuitWire[], grp?: GraphGroup[]) => void)(
-                this.nodes, this.edges, this.theme, currentViewport, this.gates, this.wires, this.groups
-            );
+                w?: CircuitWire[], grp?: GraphGroup[]) => void)(
+                    this.nodes, this.edges, this.theme, currentViewport, this.gates, this.wires, this.groups
+                );
             this.unsavedDot.style.opacity = "0";
-        } else
-        {
+        } else {
             this.unsavedDot.style.opacity = "1";
         }
     }
 
-    public forceSave(): void
-    {
+    public forceSave(): void {
         this.triggerSave(true);
     }
 
     // ─── VIEWPORT ───────────────────────────────────────────────────────────────
 
-    private updateViewBox()
-    {
+    private updateViewBox() {
         this.svg.setAttribute("viewBox", `${this.viewBox.x} ${this.viewBox.y} ${this.viewBox.w} ${this.viewBox.h}`);
     }
 
-    public fitViewToContent()
-    {
+    public fitViewToContent() {
         const fitted = this.getContentViewBox(60);
         this.viewBox = fitted;
         this.updateViewBox();
@@ -215,8 +211,7 @@ export class SvgGraphEditor
 
     // ─── RESIZER ────────────────────────────────────────────────────────────────
 
-    private buildResizer()
-    {
+    private buildResizer() {
         const resizer = document.createElement("div");
         resizer.className = "obsidian-automaton-resizer";
         resizer.onmouseenter = () => resizer.style.backgroundColor = "var(--interactive-accent)";
@@ -225,8 +220,7 @@ export class SvgGraphEditor
 
         let isResizing = false, startY = 0, startHeight = 0, startViewBoxH = 0, scaleY = 1;
 
-        resizer.addEventListener("mousedown", (e) =>
-        {
+        resizer.addEventListener("mousedown", (e) => {
             e.preventDefault();
             isResizing = true;
             startY = e.clientY;
@@ -236,8 +230,7 @@ export class SvgGraphEditor
             document.body.style.cursor = "ns-resize";
         });
 
-        document.addEventListener("mousemove", (e) =>
-        {
+        document.addEventListener("mousemove", (e) => {
             if (!isResizing) return;
             const dy = e.clientY - startY;
             this.container.style.height = `${Math.max(100, startHeight + dy)}px`;
@@ -245,10 +238,8 @@ export class SvgGraphEditor
             this.updateViewBox();
         });
 
-        document.addEventListener("mouseup", () =>
-        {
-            if (isResizing)
-            {
+        document.addEventListener("mouseup", () => {
+            if (isResizing) {
                 isResizing = false;
                 document.body.style.cursor = "";
             }
@@ -257,8 +248,7 @@ export class SvgGraphEditor
 
     // ─── UNSAVED DOT ────────────────────────────────────────────────────────────
 
-    private buildUnsavedDot()
-    {
+    private buildUnsavedDot() {
         this.unsavedDot = document.createElement("div");
         this.unsavedDot.className = "automaton-unsaved-dot";
         this.unsavedDot.style.opacity = "0";
@@ -268,8 +258,7 @@ export class SvgGraphEditor
 
     // ─── LINK BUTTON (hover overlay on nodes) ───────────────────────────────────
 
-    private buildLinkButton()
-    {
+    private buildLinkButton() {
         if (this.linkButton) this.linkButton.remove();
         const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
         g.classList.add("automaton-link-btn");
@@ -295,8 +284,7 @@ export class SvgGraphEditor
         this.svg.appendChild(g);
         this.linkButton = g;
 
-        g.addEventListener("mousedown", (e) =>
-        {
+        g.addEventListener("mousedown", (e) => {
             e.preventDefault();
             e.stopPropagation();
             if (!this.hoveredNodeId) return;
@@ -304,8 +292,7 @@ export class SvgGraphEditor
         });
     }
 
-    private showLinkButton(node: GraphNode)
-    {
+    private showLinkButton(node: GraphNode) {
         if (!this.linkButton) return;
         // Position at top-right of node circle
         const bx = node.position.x + 20;
@@ -314,13 +301,11 @@ export class SvgGraphEditor
         this.linkButton.style.display = "block";
     }
 
-    private hideLinkButton()
-    {
+    private hideLinkButton() {
         if (this.linkButton) this.linkButton.style.display = "none";
     }
 
-    private startLinking(sourceId: string)
-    {
+    private startLinking(sourceId: string) {
         this.isLinkingMode = true;
         this.linkSourceNode = sourceId;
         this.svg.style.cursor = "crosshair";
@@ -333,8 +318,7 @@ export class SvgGraphEditor
 
     // ─── DOT IMPORT ─────────────────────────────────────────────────────────────
 
-    private showDotImportModal()
-    {
+    private showDotImportModal() {
         const overlay = document.createElement("div");
         overlay.addClass("automaton-modal-overlay");
 
@@ -358,8 +342,7 @@ export class SvgGraphEditor
             text: "Convert",
             cls: "automaton-modal-button automaton-modal-button-primary"
         });
-        convertBtn.onclick = () =>
-        {
+        convertBtn.onclick = () => {
             if (textarea.value.trim()) this.importFromDot(textarea.value);
             overlay.remove();
         };
@@ -371,8 +354,7 @@ export class SvgGraphEditor
 
     // ─── LABEL RENDERING ────────────────────────────────────────────────────────
 
-    private createLabelContent(text: string, color: string): HTMLElement
-    {
+    private createLabelContent(text: string, color: string): HTMLElement {
         const container = document.createElement("div");
         container.addClass("automaton-label-container");
 
@@ -380,21 +362,16 @@ export class SvgGraphEditor
         pill.addClass("automaton-label-pill");
         pill.style.color = color;
 
-        text.split(/(\$.*?\$)/g).forEach(part =>
-        {
-            if (part.startsWith("$") && part.endsWith("$"))
-            {
-                try
-                {
+        text.split(/(\$.*?\$)/g).forEach(part => {
+            if (part.startsWith("$") && part.endsWith("$")) {
+                try {
                     const mathEl = renderMath(part.slice(1, -1), false);
                     mathEl.style.margin = "0";
                     pill.appendChild(mathEl);
-                } catch
-                {
+                } catch {
                     pill.appendChild(document.createTextNode(part));
                 }
-            } else if (part.length > 0)
-            {
+            } else if (part.length > 0) {
                 const span = document.createElement("span");
                 span.innerText = part;
                 span.addClass("automaton-label-pill-text");
@@ -414,42 +391,34 @@ export class SvgGraphEditor
         ly: number,
         hx: number,
         hy: number
-    }
-    {
+    } {
         const sx = sourceNode.position.x, sy = sourceNode.position.y;
         const tx = targetNode.position.x, ty = targetNode.position.y;
         const radius = 25;
 
-        const getNormal = (dx: number, dy: number) =>
-        {
+        const getNormal = (dx: number, dy: number) => {
             const dist = Math.sqrt(dx * dx + dy * dy) || 1;
             return { nx: dy / dist, ny: -dx / dist };
         };
 
         // 1. SELF-LOOPS
-        if (sourceNode.id === targetNode.id && (!edge.waypoints || edge.waypoints.length <= 1))
-        {
+        if (sourceNode.id === targetNode.id && (!edge.waypoints || edge.waypoints.length <= 1)) {
             let loopAngle = -Math.PI / 2;
             let pushOut = 90, curvePeak = pushOut * 0.75;
 
-            if (edge.waypoints?.length === 1)
-            {
+            if (edge.waypoints?.length === 1) {
                 const wp = edge.waypoints[0];
                 loopAngle = Math.atan2(wp.y - sy, wp.x - sx);
                 curvePeak = Math.max(30, Math.sqrt((wp.x - sx) ** 2 + (wp.y - sy) ** 2));
                 pushOut = curvePeak / 0.75;
-            } else
-            {
+            } else {
                 let sumX = 0, sumY = 0, count = 0;
-                this.edges.forEach(e =>
-                {
+                this.edges.forEach(e => {
                     const otherId = (e.source === sourceNode.id && e.target !== sourceNode.id) ? e.target :
                         (e.target === sourceNode.id && e.source !== sourceNode.id) ? e.source : null;
-                    if (otherId)
-                    {
+                    if (otherId) {
                         const other = this.nodes.find(n => n.id === otherId);
-                        if (other)
-                        {
+                        if (other) {
                             const dx = other.position.x - sx, dy = other.position.y - sy;
                             const dist = Math.sqrt(dx * dx + dy * dy) || 1;
                             sumX += dx / dist;
@@ -472,8 +441,7 @@ export class SvgGraphEditor
         }
 
         // 2. MULTI-POINT PATH
-        if (edge.waypoints?.length)
-        {
+        if (edge.waypoints?.length) {
             const wps = edge.waypoints;
             const firstWp = wps[0], lastWp = wps[wps.length - 1];
 
@@ -487,29 +455,22 @@ export class SvgGraphEditor
             const endY = ty - Math.sin(angle) * (radius + 2);
 
             let path = `M ${startX} ${startY}`;
-            for (let i = 0; i < wps.length; i++)
-            {
+            for (let i = 0; i < wps.length; i++) {
                 const wp = wps[i];
-                if (wp.type === "linear")
-                {
+                if (wp.type === "linear") {
                     path += ` L ${wp.x} ${wp.y}`;
-                } else
-                {
-                    if (wps.length === 1)
-                    {
+                } else {
+                    if (wps.length === 1) {
                         const ctrlX = 2 * wp.x - 0.5 * startX - 0.5 * endX;
                         const ctrlY = 2 * wp.y - 0.5 * startY - 0.5 * endY;
                         path += ` Q ${ctrlX} ${ctrlY} ${endX} ${endY}`;
-                    } else
-                    {
+                    } else {
                         let targetX, targetY;
-                        if (i + 1 < wps.length)
-                        {
+                        if (i + 1 < wps.length) {
                             const next = wps[i + 1];
                             targetX = next.type === "bezier" ? (wp.x + next.x) / 2 : next.x;
                             targetY = next.type === "bezier" ? (wp.y + next.y) / 2 : next.y;
-                        } else
-                        {
+                        } else {
                             targetX = endX;
                             targetY = endY;
                         }
@@ -522,8 +483,7 @@ export class SvgGraphEditor
             const allPoints = [{ x: startX, y: startY }, ...wps, { x: endX, y: endY }];
             let totalDist = 0;
             const distances: number[] = [];
-            for (let i = 0; i < allPoints.length - 1; i++)
-            {
+            for (let i = 0; i < allPoints.length - 1; i++) {
                 const d = Math.sqrt((allPoints[i + 1].x - allPoints[i].x) ** 2 + (allPoints[i + 1].y - allPoints[i].y) ** 2);
                 distances.push(d);
                 totalDist += d;
@@ -531,10 +491,8 @@ export class SvgGraphEditor
 
             const halfDist = totalDist / 2;
             let runningDist = 0, lx = 0, ly = 0;
-            for (let i = 0; i < allPoints.length - 1; i++)
-            {
-                if (runningDist + distances[i] >= halfDist || i === allPoints.length - 2)
-                {
+            for (let i = 0; i < allPoints.length - 1; i++) {
+                if (runningDist + distances[i] >= halfDist || i === allPoints.length - 2) {
                     const ratio = distances[i] === 0 ? 0 : (halfDist - runningDist) / distances[i];
                     const midX = allPoints[i].x + (allPoints[i + 1].x - allPoints[i].x) * ratio;
                     const midY = allPoints[i].y + (allPoints[i + 1].y - allPoints[i].y) * ratio;
@@ -556,8 +514,7 @@ export class SvgGraphEditor
         const hasReverse = this.edges.some(e => e.source === targetNode.id && e.target === sourceNode.id);
 
         // 3. TWO-WAY CURVE
-        if (hasReverse)
-        {
+        if (hasReverse) {
             const startX = sx + Math.cos(angle + 0.35) * radius;
             const startY = sy + Math.sin(angle + 0.35) * radius;
             const endX = tx + Math.cos(angle + Math.PI - 0.35) * radius;
@@ -586,8 +543,7 @@ export class SvgGraphEditor
 
     // ─── DOM BUILD ──────────────────────────────────────────────────────────────
 
-    private buildDOM()
-    {
+    private buildDOM() {
         const markerId = `arrow-${Math.random().toString(36).substring(2, 9)}`;
         this.svg.innerHTML = "";
         this.nodeElements.clear();
@@ -597,8 +553,7 @@ export class SvgGraphEditor
         this.groupElements.clear();
 
         // Draw groups first (behind everything)
-        this.groups.forEach(group =>
-        {
+        this.groups.forEach(group => {
             const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
             g.dataset.groupId = group.id;
 
@@ -637,8 +592,7 @@ export class SvgGraphEditor
             const grip = document.createElementNS("http://www.w3.org/2000/svg", "g");
             grip.dataset.groupResizeId = group.id;
             grip.style.cursor = "nwse-resize";
-            for (let i = 0; i < 3; i++)
-            {
+            for (let i = 0; i < 3; i++) {
                 const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
                 line.setAttribute("stroke", group.color || this.theme.groupStroke || "var(--text-muted)");
                 line.setAttribute("stroke-width", "1.5");
@@ -671,8 +625,7 @@ export class SvgGraphEditor
         this.svg.appendChild(defs);
 
         // Edges
-        this.edges.forEach(edge =>
-        {
+        this.edges.forEach(edge => {
             const edgeColor = edge.color || this.theme.edgeStroke || "var(--text-normal)";
             const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
             group.dataset.edgeId = edge.id;
@@ -703,8 +656,7 @@ export class SvgGraphEditor
             handleGroup.style.transition = "opacity 0.2s";
             handleGroup.className.baseVal = "automaton-ui-element";
 
-            edge.waypoints?.forEach(wp =>
-            {
+            edge.waypoints?.forEach(wp => {
                 const handle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
                 handle.dataset.wpId = wp.id;
                 handle.setAttribute("r", "8");
@@ -713,16 +665,13 @@ export class SvgGraphEditor
                 handleGroup.appendChild(handle);
             });
 
-            group.addEventListener("mouseenter", () =>
-            {
-                if (edge.isBendable)
-                {
+            group.addEventListener("mouseenter", () => {
+                if (edge.isBendable) {
                     handleGroup.setAttribute("opacity", "1");
                     hitbox.style.cursor = "crosshair";
                 }
             });
-            group.addEventListener("mouseleave", () =>
-            {
+            group.addEventListener("mouseleave", () => {
                 handleGroup.setAttribute("opacity", edge.isBendable ? "0.4" : "0");
                 hitbox.style.cursor = "pointer";
             });
@@ -736,8 +685,7 @@ export class SvgGraphEditor
         });
 
         // Nodes
-        this.nodes.forEach(node =>
-        {
+        this.nodes.forEach(node => {
             const nodeColor = node.color || this.theme.nodeStroke || "var(--text-normal)";
             const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
             group.style.cursor = "pointer";
@@ -752,8 +700,7 @@ export class SvgGraphEditor
             circle.setAttribute("stroke-width", "2");
             group.appendChild(circle);
 
-            if (node.isAccepting)
-            {
+            if (node.isAccepting) {
                 const inner = document.createElementNS("http://www.w3.org/2000/svg", "circle");
                 inner.setAttribute("r", "20");
                 inner.setAttribute("fill", "none");
@@ -762,8 +709,7 @@ export class SvgGraphEditor
                 group.appendChild(inner);
             }
 
-            if (node.isStart)
-            {
+            if (node.isStart) {
                 const startArrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
                 startArrow.setAttribute("d", "M -45 0 L -25 0 M -30 -5 L -25 0 L -30 5");
                 startArrow.setAttribute("fill", "none");
@@ -782,14 +728,12 @@ export class SvgGraphEditor
             group.appendChild(foreignObjNode);
 
             // Hover → show link button
-            group.addEventListener("mouseenter", () =>
-            {
+            group.addEventListener("mouseenter", () => {
                 if (this.isLinkingMode || this.draggedNode) return;
                 this.hoveredNodeId = node.id;
                 this.showLinkButton(node);
             });
-            group.addEventListener("mouseleave", (e) =>
-            {
+            group.addEventListener("mouseleave", (e) => {
                 // Don't hide if the mouse moved to the link button itself
                 const related = e.relatedTarget as Element;
                 if (this.linkButton?.contains(related)) return;
@@ -810,10 +754,8 @@ export class SvgGraphEditor
     // ─── POSITIONS ──────────────────────────────────────────────────────────────
 
 
-    private updateGroupPositions()
-    {
-        this.groups.forEach(group =>
-        {
+    private updateGroupPositions() {
+        this.groups.forEach(group => {
             const g = this.groupElements.get(group.id);
             if (!g) return;
 
@@ -822,8 +764,7 @@ export class SvgGraphEditor
             const labelEl = g.querySelector("text") as SVGTextElement;
             const grip = g.querySelector("g[data-group-resize-id]") as SVGGElement;
 
-            if (rect)
-            {
+            if (rect) {
                 rect.setAttribute("x", group.x.toString());
                 rect.setAttribute("y", group.y.toString());
                 rect.setAttribute("width", group.w.toString());
@@ -831,26 +772,22 @@ export class SvgGraphEditor
             }
 
             const textWidth = Math.max(60, (group.label || "Group").length * 7 + 16);
-            if (labelBg)
-            {
+            if (labelBg) {
                 labelBg.setAttribute("x", (group.x + 10).toString());
                 labelBg.setAttribute("y", (group.y - 10).toString());
                 labelBg.setAttribute("width", textWidth.toString());
             }
-            if (labelEl)
-            {
+            if (labelEl) {
                 labelEl.setAttribute("x", (group.x + 18).toString());
                 labelEl.setAttribute("y", (group.y).toString());
             }
 
             // Resize grip: 3 diagonal lines at bottom-right corner
-            if (grip)
-            {
+            if (grip) {
                 const gx = group.x + group.w;
                 const gy = group.y + group.h;
                 const lines = grip.querySelectorAll("line");
-                [6, 10, 14].forEach((o, i) =>
-                {
+                [6, 10, 14].forEach((o, i) => {
                     lines[i]?.setAttribute("x1", (gx - o).toString());
                     lines[i]?.setAttribute("y1", gy.toString());
                     lines[i]?.setAttribute("x2", gx.toString());
@@ -860,32 +797,26 @@ export class SvgGraphEditor
         });
     }
 
-    private updatePositions()
-    {
-        this.nodes.forEach(node =>
-        {
+    private updatePositions() {
+        this.nodes.forEach(node => {
             const group = this.nodeElements.get(node.id);
             if (group) group.setAttribute("transform", `translate(${node.position.x}, ${node.position.y})`);
         });
 
-        this.edges.forEach(edge =>
-        {
+        this.edges.forEach(edge => {
             const src = this.nodes.find(n => n.id === edge.source);
             const tgt = this.nodes.find(n => n.id === edge.target);
             const els = this.edgeElements.get(edge.id);
-            if (src && tgt && els)
-            {
+            if (src && tgt && els) {
                 const { path, lx, ly } = this.getEdgePathData(edge, src, tgt);
                 els.path.setAttribute("d", path);
                 els.hitbox.setAttribute("d", path);
                 els.label.setAttribute("x", lx.toString());
                 els.label.setAttribute("y", ly.toString());
 
-                edge.waypoints?.forEach((wp, i) =>
-                {
+                edge.waypoints?.forEach((wp, i) => {
                     const circles = els.handleGroup.querySelectorAll("circle");
-                    if (circles[i])
-                    {
+                    if (circles[i]) {
                         circles[i].setAttribute("cx", wp.x.toString());
                         circles[i].setAttribute("cy", wp.y.toString());
                     }
@@ -897,8 +828,7 @@ export class SvgGraphEditor
 
     // ─── MOUSE HELPERS ──────────────────────────────────────────────────────────
 
-    private getMousePosition(evt: MouseEvent): Position
-    {
+    private getMousePosition(evt: MouseEvent): Position {
         const CTM = this.cachedCTM || this.svg.getScreenCTM();
         if (!CTM) return { x: evt.clientX, y: evt.clientY };
         return { x: (evt.clientX - CTM.e) / CTM.a, y: (evt.clientY - CTM.f) / CTM.d };
@@ -906,34 +836,27 @@ export class SvgGraphEditor
 
     // ─── CONTEXT MENU ───────────────────────────────────────────────────────────
 
-    private buildContextMenu()
-    {
+    private buildContextMenu() {
         this.contextMenu = document.createElement("div");
         this.contextMenu.addClass("automaton-context-menu");
         document.body.appendChild(this.contextMenu);
 
-        document.addEventListener("mousedown", (e) =>
-        {
-            if (!this.contextMenu.contains(e.target as HTMLElement))
-            {
+        document.addEventListener("mousedown", (e) => {
+            if (!this.contextMenu.contains(e.target as HTMLElement)) {
                 this.contextMenu.style.display = "none";
             }
         });
 
-        document.addEventListener("keydown", (e) =>
-        {
-            if (e.key === "Escape")
-            {
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
                 this.cancelLinking();
                 this.contextMenu.style.display = "none";
             }
         });
     }
 
-    private cancelLinking()
-    {
-        if (this.isLinkingMode)
-        {
+    private cancelLinking() {
+        if (this.isLinkingMode) {
             this.isLinkingMode = false;
             this.linkSourceNode = null;
             this.svg.style.cursor = "grab";
@@ -942,8 +865,7 @@ export class SvgGraphEditor
         }
     }
 
-    private showContextMenu(x: number, y: number)
-    {
+    private showContextMenu(x: number, y: number) {
         this.contextMenu.style.display = "flex";
         this.contextMenu.style.visibility = "hidden";
 
@@ -956,15 +878,13 @@ export class SvgGraphEditor
         this.contextMenu.style.visibility = "visible";
     }
 
-    private addMenuItem(text: string, onClick: () => void, variant: "normal" | "danger" | "accent" = "normal")
-    {
+    private addMenuItem(text: string, onClick: () => void, variant: "normal" | "danger" | "accent" = "normal") {
         const btn = document.createElement("button");
         btn.textContent = text;
         btn.addClass("automaton-context-menu-item");
         if (variant === "danger") btn.addClass("automaton-context-menu-item-error");
         if (variant === "accent") btn.addClass("automaton-context-menu-accent");
-        btn.onclick = (e) =>
-        {
+        btn.onclick = (e) => {
             e.stopPropagation();
             this.contextMenu.style.display = "none";
             onClick();
@@ -972,15 +892,13 @@ export class SvgGraphEditor
         this.contextMenu.appendChild(btn);
     }
 
-    private addDivider()
-    {
+    private addDivider() {
         const d = document.createElement("div");
         d.addClass("automaton-context-menu-divider");
         this.contextMenu.appendChild(d);
     }
 
-    private addColorPicker(label: string, current: string | undefined, onChange: (c: string) => void)
-    {
+    private addColorPicker(label: string, current: string | undefined, onChange: (c: string) => void) {
         const wrapper = document.createElement("div");
         wrapper.addClass("automaton-color-picker-wrapper");
         const span = document.createElement("span");
@@ -995,8 +913,7 @@ export class SvgGraphEditor
         this.contextMenu.appendChild(wrapper);
     }
 
-    private addSubMenu(label: string, builder: (sub: HTMLElement) => void)
-    {
+    private addSubMenu(label: string, builder: (sub: HTMLElement) => void) {
         const wrapper = document.createElement("div");
         wrapper.addClass("automaton-context-submenu-wrapper");
 
@@ -1014,15 +931,13 @@ export class SvgGraphEditor
     }
 
     private addSubMenuItem(container: HTMLElement, text: string, onClick: () => void,
-                           variant: "normal" | "danger" | "accent" = "normal")
-    {
+        variant: "normal" | "danger" | "accent" = "normal") {
         const btn = document.createElement("button");
         btn.textContent = text;
         btn.addClass("automaton-context-menu-item");
         if (variant === "danger") btn.addClass("automaton-context-menu-item-error");
         if (variant === "accent") btn.addClass("automaton-context-menu-accent");
-        btn.onclick = (e) =>
-        {
+        btn.onclick = (e) => {
             e.stopPropagation();
             this.contextMenu.style.display = "none";
             onClick();
@@ -1032,14 +947,12 @@ export class SvgGraphEditor
 
     // ─── EVENTS ─────────────────────────────────────────────────────────────────
 
-    private initEvents()
-    {
+    private initEvents() {
         this.container.addEventListener("click", (e) => e.stopPropagation());
         this.container.addEventListener("pointerdown", (e) => e.stopPropagation());
 
         // ── CONTEXT MENU ──
-        this.svg.addEventListener("contextmenu", (evt) =>
-        {
+        this.svg.addEventListener("contextmenu", (evt) => {
             evt.preventDefault();
             evt.stopPropagation();
             this.contextMenu.innerHTML = "";
@@ -1051,35 +964,29 @@ export class SvgGraphEditor
             const gateGroupCtx = target.closest("g[data-gate-id]") as SVGGElement;
 
             // NODE SECTION
-            if (nodeGroup?.dataset.nodeId)
-            {
+            if (nodeGroup?.dataset.nodeId) {
                 const node = this.nodes.find(n => n.id === nodeGroup.dataset.nodeId);
-                if (node)
-                {
-                    this.addMenuItem(node.isStart ? "Remove start" : "Set as start", () =>
-                    {
+                if (node) {
+                    this.addMenuItem(node.isStart ? "Remove start" : "Set as start", () => {
                         node.isStart = !node.isStart;
                         this.buildDOM();
                         this.updatePositions();
                         this.triggerSave();
                     });
-                    this.addMenuItem(node.isAccepting ? "Remove accepting" : "Set as accepting", () =>
-                    {
+                    this.addMenuItem(node.isAccepting ? "Remove accepting" : "Set as accepting", () => {
                         node.isAccepting = !node.isAccepting;
                         this.buildDOM();
                         this.updatePositions();
                         this.triggerSave();
                     });
-                    this.addColorPicker("Node color", node.color, (c) =>
-                    {
+                    this.addColorPicker("Node color", node.color, (c) => {
                         node.color = c;
                         this.buildDOM();
                         this.updatePositions();
                         this.triggerSave();
                     });
                     this.addDivider();
-                    this.addMenuItem("Delete state", () =>
-                    {
+                    this.addMenuItem("Delete state", () => {
                         this.nodes = this.nodes.filter(n => n.id !== node.id);
                         this.edges = this.edges.filter(e => e.source !== node.id && e.target !== node.id);
                         this.buildDOM();
@@ -1090,20 +997,16 @@ export class SvgGraphEditor
             }
 
             // EDGE SECTION
-            else if (edgeGroup?.dataset.edgeId)
-            {
+            else if (edgeGroup?.dataset.edgeId) {
                 const edge = this.edges.find(e => e.id === edgeGroup.dataset.edgeId);
-                if (edge)
-                {
-                    if (wpHandle)
-                    {
+                if (edge) {
+                    if (wpHandle) {
                         // Waypoint sub-menu
                         const wpId = wpHandle.dataset.wpId;
                         const wpIdx = (edge.waypoints ?? []).findIndex(w => w.id === wpId);
                         const wp = edge.waypoints?.[wpIdx];
                         if (!wp) return;
-                        this.addMenuItem(wp?.type === "bezier" ? "Change to linear" : "Change to bezier", () =>
-                        {
+                        this.addMenuItem(wp?.type === "bezier" ? "Change to linear" : "Change to bezier", () => {
                             if (!wp) return;
                             wp.type = wp.type === "bezier" ? "linear" : "bezier";
                             this.buildDOM();
@@ -1111,28 +1014,23 @@ export class SvgGraphEditor
                             this.triggerSave();
                         });
                         this.addDivider();
-                        this.addMenuItem("Delete point", () =>
-                        {
+                        this.addMenuItem("Delete point", () => {
                             edge.waypoints?.splice(wpIdx, 1);
                             if (!edge.waypoints?.length) delete edge.waypoints;
                             this.buildDOM();
                             this.updatePositions();
                             this.triggerSave();
                         }, "danger");
-                    } else
-                    {
+                    } else {
                         // Edge sub-menu
-                        this.addMenuItem(edge.isBendable ? "Lock path" : "Unlock path", () =>
-                        {
+                        this.addMenuItem(edge.isBendable ? "Lock path" : "Unlock path", () => {
                             edge.isBendable = !edge.isBendable;
                             this.buildDOM();
                             this.updatePositions();
                             this.triggerSave();
                         });
-                        if (edge.isBendable)
-                        {
-                            this.addMenuItem("Add bezier point", () =>
-                            {
+                        if (edge.isBendable) {
+                            this.addMenuItem("Add bezier point", () => {
                                 const mp = this.getMousePosition(evt);
                                 (edge.waypoints ??= []).push({
                                     id: Date.now().toString(),
@@ -1144,8 +1042,7 @@ export class SvgGraphEditor
                                 this.updatePositions();
                                 this.triggerSave();
                             });
-                            this.addMenuItem("Add linear point", () =>
-                            {
+                            this.addMenuItem("Add linear point", () => {
                                 const mp = this.getMousePosition(evt);
                                 (edge.waypoints ??= []).push({
                                     id: Date.now().toString(),
@@ -1158,23 +1055,20 @@ export class SvgGraphEditor
                                 this.triggerSave();
                             });
                         }
-                        this.addColorPicker("Edge color", edge.color, (c) =>
-                        {
+                        this.addColorPicker("Edge color", edge.color, (c) => {
                             edge.color = c;
                             this.buildDOM();
                             this.updatePositions();
                             this.triggerSave();
                         });
-                        this.addMenuItem(edge.type === "arrow" ? "Remove arrow" : "Add arrow", () =>
-                        {
+                        this.addMenuItem(edge.type === "arrow" ? "Remove arrow" : "Add arrow", () => {
                             edge.type = edge.type === "arrow" ? undefined : "arrow";
                             this.buildDOM();
                             this.updatePositions();
                             this.triggerSave();
                         });
                         this.addDivider();
-                        this.addMenuItem("Delete edge", () =>
-                        {
+                        this.addMenuItem("Delete edge", () => {
                             this.edges = this.edges.filter(e => e.id !== edge.id);
                             this.buildDOM();
                             this.updatePositions();
@@ -1185,13 +1079,10 @@ export class SvgGraphEditor
             }
 
             // GATE SECTION
-            if (gateGroupCtx?.dataset.gateId)
-            {
+            if (gateGroupCtx?.dataset.gateId) {
                 const gate = this.gates.find(g => g.id === gateGroupCtx.dataset.gateId);
-                if (gate)
-                {
-                    this.addMenuItem("Rename label", () =>
-                    {
+                if (gate) {
+                    this.addMenuItem("Rename label", () => {
                         this.contextMenu.style.display = "none";
                         const gateEl = this.gateElements.get(gate.id);
                         if (!gateEl) return;
@@ -1215,8 +1106,7 @@ export class SvgGraphEditor
                         input.select();
 
                         let saved = false;
-                        const save = () =>
-                        {
+                        const save = () => {
                             if (saved) return;
                             saved = true;
                             gate.label = input.value;
@@ -1226,20 +1116,16 @@ export class SvgGraphEditor
                             this.triggerSave();
                         };
                         input.addEventListener("blur", save);
-                        input.addEventListener("keydown", (e) =>
-                        {
+                        input.addEventListener("keydown", (e) => {
                             if (e.key === "Enter") save();
-                            if (e.key === "Escape")
-                            {
+                            if (e.key === "Escape") {
                                 saved = true;
                                 input.remove();
                             }
                         });
                     });
-                    if (gate.type === "INPUT")
-                    {
-                        this.addMenuItem("Toggle value", () =>
-                        {
+                    if (gate.type === "INPUT") {
+                        this.addMenuItem("Toggle value", () => {
                             this.simulator.toggleInput(gate.id);
                             this.updateCircuitVisuals();
                             this.triggerSave();
@@ -1248,8 +1134,7 @@ export class SvgGraphEditor
                     this.addDivider();
                     this.addMenuItem("Export truth table", () => this.showTruthTableModal());
                     this.addDivider();
-                    this.addMenuItem("Delete gate", () =>
-                    {
+                    this.addMenuItem("Delete gate", () => {
                         const gId = gate.id;
                         this.gates = this.gates.filter(g => g.id !== gId);
                         this.wires = this.wires.filter(w => w.fromGate !== gId && w.toGate !== gId);
@@ -1264,11 +1149,11 @@ export class SvgGraphEditor
 
             const wireWpCtx = target.closest("circle[data-wire-wp-id]") as SVGCircleElement;
             if (wireWpCtx && !gateGroupCtx && !nodeGroup && !edgeGroup) {
-                const wId  = wireWpCtx.dataset.wireId  ?? '';
+                const wId = wireWpCtx.dataset.wireId ?? '';
                 const wpId = wireWpCtx.dataset.wireWpId ?? '';
                 const wire = this.wires.find(w => w.id === wId);
-                const wp   = wire?.waypoints?.find(w => w.id === wpId);
-            
+                const wp = wire?.waypoints?.find(w => w.id === wpId);
+
                 if (wire && wp) {
                     this.addMenuItem(wp.type === 'bezier' ? "Change to linear" : "Change to bezier", () => {
                         wp.type = wp.type === 'bezier' ? 'linear' : 'bezier';
@@ -1284,29 +1169,23 @@ export class SvgGraphEditor
             }
 
             // WIRE SECTION
-            if (!gateGroupCtx && !nodeGroup && !edgeGroup)
-            {
+            if (!gateGroupCtx && !nodeGroup && !edgeGroup) {
                 // Match either the hitbox (direct target) or visible path
                 const wireEl = (
                     target.dataset?.wireId ? target :
                         target.closest("[data-wire-id]")
                 ) as SVGPathElement;
-                if (wireEl?.dataset.wireId)
-                {
+                if (wireEl?.dataset.wireId) {
                     const wire = this.wires.find(w => w.id === wireEl.dataset.wireId);
-                    if (wire)
-                    {
-                        this.addMenuItem(wire.isBendable ? "Lock path" : "Unlock path", () =>
-                        {
+                    if (wire) {
+                        this.addMenuItem(wire.isBendable ? "Lock path" : "Unlock path", () => {
                             wire.isBendable = !wire.isBendable;
                             this.buildDOM();
                             this.updatePositions();
                             this.triggerSave();
                         });
-                        if (wire.isBendable)
-                        {
-                            this.addMenuItem("Add bezier point", () =>
-                            {
+                        if (wire.isBendable) {
+                            this.addMenuItem("Add bezier point", () => {
                                 const mp = this.getMousePosition(evt);
                                 (wire.waypoints ??= []).push({
                                     id: Date.now().toString(),
@@ -1318,8 +1197,7 @@ export class SvgGraphEditor
                                 this.updatePositions();
                                 this.triggerSave();
                             });
-                            this.addMenuItem("Add linear point", () =>
-                            {
+                            this.addMenuItem("Add linear point", () => {
                                 const mp = this.getMousePosition(evt);
                                 (wire.waypoints ??= []).push({
                                     id: Date.now().toString(),
@@ -1334,8 +1212,7 @@ export class SvgGraphEditor
                             this.addDivider();
                         }
                     }
-                    this.addMenuItem("Delete wire", () =>
-                    {
+                    this.addMenuItem("Delete wire", () => {
                         const delWireId = wireEl.dataset.wireId;
                         this.wires = this.wires.filter(w => w.id !== delWireId);
                         this.simulator.rebuild(this.gates, this.wires);
@@ -1344,11 +1221,9 @@ export class SvgGraphEditor
                         this.updatePositions();
                         this.triggerSave();
                     }, "danger");
-                } else
-                {
+                } else {
                     // CANVAS SECTION
-                    this.addMenuItem("Add state here", () =>
-                    {
+                    this.addMenuItem("Add state here", () => {
                         const mp = this.getMousePosition(evt);
                         const newId = `q${this.nodes.length}`;
                         this.nodes.push({ id: newId, position: { x: mp.x, y: mp.y }, label: newId });
@@ -1357,13 +1232,10 @@ export class SvgGraphEditor
                         this.triggerSave();
                     });
                     this.addDivider();
-                    this.addSubMenu("Add gate", (sub) =>
-                    {
+                    this.addSubMenu("Add gate", (sub) => {
                         const gateTypes: GateType[] = ["INPUT", "OUTPUT", "AND", "OR", "NOT", "NAND", "NOR", "XOR", "XNOR"];
-                        gateTypes.forEach(type =>
-                        {
-                            this.addSubMenuItem(sub, type, () =>
-                            {
+                        gateTypes.forEach(type => {
+                            this.addSubMenuItem(sub, type, () => {
                                 const mp = this.getMousePosition(evt);
                                 const newGate: CircuitGate = {
                                     id: `g_${Date.now()}`,
@@ -1382,8 +1254,7 @@ export class SvgGraphEditor
                     });
                     this.addDivider();
                     this.addMenuItem("Export truth table", () => this.showTruthTableModal());
-                    this.addMenuItem("Add frame here", () =>
-                    {
+                    this.addMenuItem("Add frame here", () => {
                         const mp = this.getMousePosition(evt);
                         this.groups.push({
                             id: `grp_${Date.now()}`,
@@ -1399,8 +1270,7 @@ export class SvgGraphEditor
                     });
                     this.addMenuItem("Import DOT", () => this.showDotImportModal());
                     this.addDivider();
-                    this.addMenuItem("Save", () =>
-                    {
+                    this.addMenuItem("Save", () => {
                         this.triggerSave(true);
                         this.onManualSave();
                     }, "accent");
@@ -1411,8 +1281,7 @@ export class SvgGraphEditor
         });
 
         // ── SCROLL ZOOM ──
-        this.svg.addEventListener("wheel", (evt) =>
-        {
+        this.svg.addEventListener("wheel", (evt) => {
             evt.preventDefault();
             const mousePos = this.getMousePosition(evt);
             const factor = Math.sign(evt.deltaY) > 0 ? 1.1 : 0.9;
@@ -1427,8 +1296,7 @@ export class SvgGraphEditor
         });
 
         // ── DOUBLE CLICK (label edit) ──
-        this.svg.addEventListener("dblclick", (evt) =>
-        {
+        this.svg.addEventListener("dblclick", (evt) => {
             evt.preventDefault();
             evt.stopPropagation();
             const target = evt.target as SVGElement;
@@ -1436,11 +1304,9 @@ export class SvgGraphEditor
             const edgeGroup = target.closest("g[data-edge-id]") as SVGGElement;
 
             // Double-click on waypoint circle = clear all waypoints
-            if (edgeGroup && target.nodeName.toLowerCase() === "circle")
-            {
+            if (edgeGroup && target.nodeName.toLowerCase() === "circle") {
                 const edge = this.edges.find(e => e.id === edgeGroup.dataset.edgeId);
-                if (edge?.isBendable)
-                {
+                if (edge?.isBendable) {
                     delete edge.waypoints;
                     this.updatePositions();
                     this.triggerSave();
@@ -1450,11 +1316,9 @@ export class SvgGraphEditor
 
             // Double-click on group label area → rename
             const groupDblEl = target.closest("[data-group-drag-id]") as SVGElement;
-            if (groupDblEl?.dataset?.groupDragId)
-            {
+            if (groupDblEl?.dataset?.groupDragId) {
                 const grp = this.groups.find(g => g.id === (groupDblEl as unknown as HTMLElement).dataset.groupDragId);
-                if (grp)
-                {
+                if (grp) {
                     const input = document.createElement("input");
                     input.type = "text";
                     input.value = grp.label || "";
@@ -1466,8 +1330,7 @@ export class SvgGraphEditor
                     input.focus();
                     input.select();
                     let saved = false;
-                    const save = () =>
-                    {
+                    const save = () => {
                         if (saved) return;
                         saved = true;
                         grp.label = input.value;
@@ -1476,11 +1339,9 @@ export class SvgGraphEditor
                         this.triggerSave();
                     };
                     input.addEventListener("blur", save);
-                    input.addEventListener("keydown", (e) =>
-                    {
+                    input.addEventListener("keydown", (e) => {
                         if (e.key === "Enter") save();
-                        if (e.key === "Escape")
-                        {
+                        if (e.key === "Escape") {
                             saved = true;
                             input.remove();
                         }
@@ -1492,12 +1353,10 @@ export class SvgGraphEditor
             let editTarget: GraphNode | GraphEdge | null = null;
             let currentText = "";
 
-            if (nodeGroup?.dataset.nodeId)
-            {
+            if (nodeGroup?.dataset.nodeId) {
                 editTarget = this.nodes.find(n => n.id === nodeGroup.dataset.nodeId) || null;
                 if (editTarget) currentText = (editTarget as GraphNode).label;
-            } else if (edgeGroup?.dataset.edgeId)
-            {
+            } else if (edgeGroup?.dataset.edgeId) {
                 editTarget = this.edges.find(e => e.id === edgeGroup.dataset.edgeId) || null;
                 if (editTarget) currentText = (editTarget as GraphEdge).label || "";
             } else return;
@@ -1514,16 +1373,13 @@ export class SvgGraphEditor
             input.select();
 
             let saved = false;
-            const save = () =>
-            {
+            const save = () => {
                 if (saved) return;
                 saved = true;
-                if (nodeGroup?.dataset.nodeId)
-                {
+                if (nodeGroup?.dataset.nodeId) {
                     const n = this.nodes.find(n => n.id === nodeGroup.dataset.nodeId);
                     if (n) n.label = input.value;
-                } else if (edgeGroup?.dataset.edgeId)
-                {
+                } else if (edgeGroup?.dataset.edgeId) {
                     const e = this.edges.find(e => e.id === edgeGroup.dataset.edgeId);
                     if (e) e.label = input.value;
                 }
@@ -1534,11 +1390,9 @@ export class SvgGraphEditor
             };
 
             input.addEventListener("blur", save);
-            input.addEventListener("keydown", (e) =>
-            {
+            input.addEventListener("keydown", (e) => {
                 if (e.key === "Enter") save();
-                if (e.key === "Escape")
-                {
+                if (e.key === "Escape") {
                     saved = true;
                     input.remove();
                 }
@@ -1546,14 +1400,12 @@ export class SvgGraphEditor
         });
 
         // ── MOUSE DOWN ──
-        this.svg.addEventListener("mousedown", (evt) =>
-        {
+        this.svg.addEventListener("mousedown", (evt) => {
             evt.preventDefault();
             evt.stopPropagation();
 
             // Middle click / Alt+click = pan
-            if (evt.button === 1 || (evt.button === 0 && evt.altKey))
-            {
+            if (evt.button === 1 || (evt.button === 0 && evt.altKey)) {
                 this.isPanning = true;
                 this.panScale = {
                     x: this.viewBox.w / (this.container.clientWidth || 800),
@@ -1573,11 +1425,9 @@ export class SvgGraphEditor
 
             // Group resize (check before drag so grip takes priority)
             const resizeEl = target.closest("[data-group-resize-id]") as SVGElement;
-            if (resizeEl?.dataset?.groupResizeId)
-            {
+            if (resizeEl?.dataset?.groupResizeId) {
                 const grp = this.groups.find(g => g.id === resizeEl.dataset.groupResizeId);
-                if (grp)
-                {
+                if (grp) {
                     this.cachedCTM = this.svg.getScreenCTM();
                     this.draggedGroupResize = grp;
                     this.resizeStartSize = { w: grp.w, h: grp.h };
@@ -1590,11 +1440,9 @@ export class SvgGraphEditor
 
             // Group drag
             const groupDragEl = target.closest("[data-group-drag-id]") as SVGElement;
-            if (groupDragEl?.dataset?.groupDragId)
-            {
+            if (groupDragEl?.dataset?.groupDragId) {
                 const grp = this.groups.find(g => g.id === groupDragEl.dataset.groupDragId);
-                if (grp)
-                {
+                if (grp) {
                     this.cachedCTM = this.svg.getScreenCTM();
                     const mp = this.getMousePosition(evt);
                     this.dragOffset = { x: mp.x - grp.x, y: mp.y - grp.y };
@@ -1606,12 +1454,10 @@ export class SvgGraphEditor
             }
 
             // Waypoint drag
-            if (wpHandle)
-            {
+            if (wpHandle) {
                 const edgeGroup = target.closest("g[data-edge-id]") as SVGGElement;
                 const edge = this.edges.find(e => e.id === edgeGroup?.dataset.edgeId);
-                if (edge?.isBendable)
-                {
+                if (edge?.isBendable) {
                     this.cachedCTM = this.svg.getScreenCTM();
                     this.draggedWaypoint = { edge, wpId: wpHandle.dataset.wpId ?? "" };
                     this.dragStartPos = { x: evt.clientX, y: evt.clientY };
@@ -1622,13 +1468,11 @@ export class SvgGraphEditor
 
             // Wire waypoint drag — must come before node drag
             const wireWpEl = target.closest("circle[data-wire-wp-id]") as SVGCircleElement;
-            if (wireWpEl)
-            {
+            if (wireWpEl) {
                 const wId = wireWpEl.dataset.wireId ?? "";
                 const wpId = wireWpEl.dataset.wireWpId ?? "";
                 const wire = this.wires.find(w => w.id === wId);
-                if (wire?.isBendable)
-                {
+                if (wire?.isBendable) {
                     this.cachedCTM = this.svg.getScreenCTM();
                     this.draggedWireWaypoint = { wire, wpId };
                     this.dragStartPos = { x: evt.clientX, y: evt.clientY };
@@ -1638,14 +1482,11 @@ export class SvgGraphEditor
             }
 
             // Node click in link mode
-            if (this.isLinkingMode && nodeGroup?.dataset.nodeId)
-            {
+            if (this.isLinkingMode && nodeGroup?.dataset.nodeId) {
                 const clickedId = nodeGroup.dataset.nodeId;
-                if (!this.linkSourceNode)
-                {
+                if (!this.linkSourceNode) {
                     this.startLinking(clickedId);
-                } else
-                {
+                } else {
                     this.edges.push({ id: `e_${Date.now()}`, source: this.linkSourceNode, target: clickedId });
                     this.linkSourceNode = null;
                     this.isLinkingMode = false;
@@ -1658,11 +1499,9 @@ export class SvgGraphEditor
             }
 
             // Normal node drag
-            if (nodeGroup?.dataset.nodeId)
-            {
+            if (nodeGroup?.dataset.nodeId) {
                 const node = this.nodes.find(n => n.id === nodeGroup.dataset.nodeId) || null;
-                if (node)
-                {
+                if (node) {
                     this.cachedCTM = this.svg.getScreenCTM();
                     const mp = this.getMousePosition(evt);
                     this.dragOffset = { x: mp.x - node.position.x, y: mp.y - node.position.y };
@@ -1675,8 +1514,7 @@ export class SvgGraphEditor
 
             // Port click → start/finish wiring
             const portEl = target.closest("circle[data-gate-port]") as SVGCircleElement;
-            if (portEl)
-            {
+            if (portEl) {
                 evt.stopPropagation();
                 const gateId = portEl.dataset.gateId ?? "";
                 const port = portEl.dataset.gatePort ?? "";
@@ -1686,23 +1524,18 @@ export class SvgGraphEditor
                 const localPort = pp[port];
                 const worldPos = { x: gate.position.x + localPort.x, y: gate.position.y + localPort.y };
 
-                if (!this.wiringFrom)
-                {
+                if (!this.wiringFrom) {
                     // Start wiring from an output port
-                    if (port === "out")
-                    {
+                    if (port === "out") {
                         this.wiringFrom = { gateId, port, pos: worldPos };
                         this.startWiringPreview(worldPos);
                     }
-                } else
-                {
+                } else {
                     // Finish wiring to an input port
-                    if (port !== "out" && this.wiringFrom.gateId !== gateId)
-                    {
+                    if (port !== "out" && this.wiringFrom.gateId !== gateId) {
                         // Check not already connected
                         const exists = this.wires.some(w => w.toGate === gateId && w.toPort === port);
-                        if (!exists)
-                        {
+                        if (!exists) {
                             this.wires.push({
                                 id: `w_${Date.now()}`,
                                 fromGate: this.wiringFrom.gateId,
@@ -1724,11 +1557,9 @@ export class SvgGraphEditor
 
             // Gate body drag (INPUT toggle handled in endDrag when !hasMovedEnough)
             const gateGroup = target.closest("g[data-gate-id]") as SVGGElement;
-            if (gateGroup?.dataset.gateId && !portEl)
-            {
+            if (gateGroup?.dataset.gateId && !portEl) {
                 const gate = this.gates.find(g => g.id === gateGroup.dataset.gateId) || null;
-                if (gate)
-                {
+                if (gate) {
                     this.draggedGate = gate;
                     this.cachedCTM = this.svg.getScreenCTM();
                     const mp = this.getMousePosition(evt);
@@ -1739,17 +1570,14 @@ export class SvgGraphEditor
             }
 
             // Cancel wiring on background click
-            if (this.wiringFrom && !portEl && !gateGroup)
-            {
+            if (this.wiringFrom && !portEl && !gateGroup) {
                 this.cancelWiring();
             }
         });
 
         // ── MOUSE MOVE ──
-        this.svg.addEventListener("mousemove", (evt) =>
-        {
-            if (this.isPanning)
-            {
+        this.svg.addEventListener("mousemove", (evt) => {
+            if (this.isPanning) {
                 this.viewBox.x = this.panStartViewBox.x - (evt.clientX - this.panStart.x) * this.panScale.x;
                 this.viewBox.y = this.panStartViewBox.y - (evt.clientY - this.panStart.y) * this.panScale.y;
                 this.updateViewBox();
@@ -1757,14 +1585,11 @@ export class SvgGraphEditor
             }
 
             const hasDrag = this.draggedNode || this.draggedWaypoint || this.draggedGate || this.draggedGroup || this.draggedGroupResize || this.draggedWireWaypoint;
-            if (!this.hasMovedEnough && hasDrag)
-            {
+            if (!this.hasMovedEnough && hasDrag) {
                 const dist = Math.sqrt((evt.clientX - this.dragStartPos.x) ** 2 + (evt.clientY - this.dragStartPos.y) ** 2);
-                if (dist < 3)
-                {
+                if (dist < 3) {
                     // Still allow wiring preview to update even below threshold
-                    if (this.wiringFrom && this.wiringPreviewLine)
-                    {
+                    if (this.wiringFrom && this.wiringPreviewLine) {
                         const mp2 = this.getMousePosition(evt);
                         this.wiringPreviewLine.setAttribute("x2", mp2.x.toString());
                         this.wiringPreviewLine.setAttribute("y2", mp2.y.toString());
@@ -1779,8 +1604,7 @@ export class SvgGraphEditor
             const mp = this.getMousePosition(evt);
 
             // Group resize
-            if (this.draggedGroupResize && this.resizeStartSize && this.resizeStartMouse)
-            {
+            if (this.draggedGroupResize && this.resizeStartSize && this.resizeStartMouse) {
                 this.draggedGroupResize.w = Math.max(80, this.resizeStartSize.w + (mp.x - this.resizeStartMouse.x));
                 this.draggedGroupResize.h = Math.max(60, this.resizeStartSize.h + (mp.y - this.resizeStartMouse.y));
                 this.updateGroupPositions();
@@ -1788,20 +1612,17 @@ export class SvgGraphEditor
             }
 
             // Group drag
-            if (this.draggedGroup)
-            {
+            if (this.draggedGroup) {
                 this.draggedGroup.x = Math.round((mp.x - this.dragOffset.x) * 10) / 10;
                 this.draggedGroup.y = Math.round((mp.y - this.dragOffset.y) * 10) / 10;
                 this.updateGroupPositions();
                 return;
             }
 
-            if (this.draggedWaypoint)
-            {
+            if (this.draggedWaypoint) {
                 const { edge, wpId } = this.draggedWaypoint;
                 const wp = edge.waypoints?.find(w => w.id === (wpId ?? ""));
-                if (wp)
-                {
+                if (wp) {
                     wp.x = Math.round(mp.x * 10) / 10;
                     wp.y = Math.round(mp.y * 10) / 10;
                     this.updatePositions();
@@ -1809,29 +1630,23 @@ export class SvgGraphEditor
                 return;
             }
 
-            if (this.draggedNode)
-            {
+            if (this.draggedNode) {
                 const newX = Math.round((mp.x - this.dragOffset.x) * 10) / 10;
                 const newY = Math.round((mp.y - this.dragOffset.y) * 10) / 10;
                 const dx = newX - this.draggedNode.position.x;
                 const dy = newY - this.draggedNode.position.y;
                 this.draggedNode.position = { x: newX, y: newY };
 
-                this.edges.forEach(edge =>
-                {
-                    if (edge.waypoints)
-                    {
+                this.edges.forEach(edge => {
+                    if (edge.waypoints) {
                         const dragId = this.draggedNode?.id ?? "";
                         const isSelf = edge.source === dragId && edge.target === dragId;
                         const isConnected = edge.source === dragId || edge.target === dragId;
-                        edge.waypoints.forEach(wp =>
-                        {
-                            if (isSelf)
-                            {
+                        edge.waypoints.forEach(wp => {
+                            if (isSelf) {
                                 wp.x += dx;
                                 wp.y += dy;
-                            } else if (isConnected)
-                            {
+                            } else if (isConnected) {
                                 wp.x += dx / 2;
                                 wp.y += dy / 2;
                             }
@@ -1842,12 +1657,10 @@ export class SvgGraphEditor
             }
 
             // Wire waypoint dragging
-            if (this.draggedWireWaypoint)
-            {
+            if (this.draggedWireWaypoint) {
                 const { wire, wpId } = this.draggedWireWaypoint;
                 const wp = wire.waypoints?.find(w => w.id === wpId);
-                if (wp)
-                {
+                if (wp) {
                     wp.x = Math.round(mp.x * 10) / 10;
                     wp.y = Math.round(mp.y * 10) / 10;
                     this.updateGatePositions();
@@ -1856,8 +1669,7 @@ export class SvgGraphEditor
             }
 
             // Gate dragging
-            if (this.draggedGate)
-            {
+            if (this.draggedGate) {
                 this.draggedGate.position = {
                     x: Math.round((mp.x - this.dragOffset.x) * 10) / 10,
                     y: Math.round((mp.y - this.dragOffset.y) * 10) / 10
@@ -1866,55 +1678,45 @@ export class SvgGraphEditor
             }
 
             // Wiring preview
-            if (this.wiringFrom && this.wiringPreviewLine)
-            {
+            if (this.wiringFrom && this.wiringPreviewLine) {
                 this.wiringPreviewLine.setAttribute("x2", mp.x.toString());
                 this.wiringPreviewLine.setAttribute("y2", mp.y.toString());
             }
         });
 
         // ── MOUSE UP / LEAVE ──
-        const endDrag = () =>
-        {
+        const endDrag = () => {
             this.cachedCTM = null;
-            if (this.isPanning)
-            {
+            if (this.isPanning) {
                 this.isPanning = false;
                 this.svg.style.cursor = "grab";
             }
-            if (this.draggedNode)
-            {
+            if (this.draggedNode) {
                 const group = this.nodeElements.get(this.draggedNode.id);
                 if (group) group.style.cursor = "pointer";
                 this.draggedNode = null;
                 this.triggerSave(false);
             }
-            if (this.draggedWaypoint)
-            {
+            if (this.draggedWaypoint) {
                 this.draggedWaypoint = null;
                 this.triggerSave(false);
             }
-            if (this.draggedWireWaypoint)
-            {
+            if (this.draggedWireWaypoint) {
                 this.draggedWireWaypoint = null;
                 this.triggerSave(false);
             }
-            if (this.draggedGroup)
-            {
+            if (this.draggedGroup) {
                 this.draggedGroup = null;
                 this.triggerSave(false);
             }
-            if (this.draggedGroupResize)
-            {
+            if (this.draggedGroupResize) {
                 this.draggedGroupResize = null;
                 this.resizeStartSize = null;
                 this.resizeStartMouse = null;
                 this.triggerSave(false);
             }
-            if (this.draggedGate)
-            {
-                if (!this.hasMovedEnough && this.draggedGate.type === "INPUT")
-                {
+            if (this.draggedGate) {
+                if (!this.hasMovedEnough && this.draggedGate.type === "INPUT") {
                     this.simulator.toggleInput(this.draggedGate.id);
                     this.updateCircuitVisuals();
                 }
@@ -1931,28 +1733,23 @@ export class SvgGraphEditor
 
     // ─── DOT IMPORT ─────────────────────────────────────────────────────────────
 
-    private importFromDot(dotString: string)
-    {
+    private importFromDot(dotString: string) {
         const parsedNodes = new Map<string, GraphNode>();
         const parsedEdges: GraphEdge[] = [];
 
-        const getNode = (id: string) =>
-        {
+        const getNode = (id: string) => {
             if (!parsedNodes.has(id)) parsedNodes.set(id, { id, label: id, position: { x: 0, y: 0 } });
             return parsedNodes.get(id)!;
         };
 
-        dotString.split("\n").forEach(rawLine =>
-        {
+        dotString.split("\n").forEach(rawLine => {
             const line = rawLine.trim();
             if (line.startsWith("//") || line.startsWith("digraph") || line === "}") return;
 
             const edgeMatch = line.match(/([a-zA-Z0-9_]+)\s*->\s*([a-zA-Z0-9_]+)(?:\s*\[(.*?)\])?/);
-            if (edgeMatch)
-            {
+            if (edgeMatch) {
                 const [, source, target, attrs = ""] = edgeMatch;
-                if (source.toLowerCase() === "start" || source.toLowerCase() === "init")
-                {
+                if (source.toLowerCase() === "start" || source.toLowerCase() === "init") {
                     getNode(target).isStart = true;
                     return;
                 }
@@ -1969,8 +1766,7 @@ export class SvgGraphEditor
             }
 
             const nodeMatch = line.match(/([a-zA-Z0-9_]+)\s*\[(.*?)\]/);
-            if (nodeMatch && !line.includes("->"))
-            {
+            if (nodeMatch && !line.includes("->")) {
                 const [, id, attrs] = nodeMatch;
                 const node = getNode(id);
                 if (attrs.includes("shape=doublecircle")) node.isAccepting = true;
@@ -1983,8 +1779,7 @@ export class SvgGraphEditor
         const radius = Math.max(100, nodeArray.length * 25);
         const centerX = this.svg.clientWidth / 2 || 250;
 
-        nodeArray.forEach((node, i) =>
-        {
+        nodeArray.forEach((node, i) => {
             const angle = Math.PI + (i / nodeArray.length) * Math.PI * 2;
             node.position = { x: centerX + radius * Math.cos(angle), y: 250 + radius * Math.sin(angle) };
         });
@@ -1999,14 +1794,12 @@ export class SvgGraphEditor
 
     // ─── GATE RENDERING ─────────────────────────────────────────────────────────
 
-    private buildGateDOM()
-    {
+    private buildGateDOM() {
         this.gateElements.clear();
         this.wireElements.clear();
 
         // Inject electricity animation style once
-        if (!this.svg.querySelector("#wire-anim-style"))
-        {
+        if (!this.svg.querySelector("#wire-anim-style")) {
             const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
             style.id = "wire-anim-style";
             style.textContent = `
@@ -2019,8 +1812,7 @@ export class SvgGraphEditor
         }
 
         // Draw wires first (under gates)
-        this.wires.forEach(wire =>
-        {
+        this.wires.forEach(wire => {
             // Invisible hitbox for easier clicking
             const hitbox = document.createElementNS("http://www.w3.org/2000/svg", "path");
             hitbox.setAttribute("fill", "none");
@@ -2047,12 +1839,10 @@ export class SvgGraphEditor
             handles.style.pointerEvents = wire.isBendable ? "all" : "none";
             this.svg.appendChild(handles);
 
-            hitbox.addEventListener("mouseenter", () =>
-            {
+            hitbox.addEventListener("mouseenter", () => {
                 if (wire.isBendable) handles.setAttribute("opacity", "1");
             });
-            hitbox.addEventListener("mouseleave", () =>
-            {
+            hitbox.addEventListener("mouseleave", () => {
                 handles.setAttribute("opacity", wire.isBendable ? "0.8" : "0");
             });
 
@@ -2060,8 +1850,7 @@ export class SvgGraphEditor
         });
 
         // Draw gates
-        this.gates.forEach(gate =>
-        {
+        this.gates.forEach(gate => {
             const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
             g.dataset.gateId = gate.id;
             g.style.cursor = "grab";
@@ -2094,8 +1883,7 @@ export class SvgGraphEditor
 
             // Port circles
             const ports = getPortPositions(gate.type);
-            Object.entries(ports).forEach(([portName, localPos]) =>
-            {
+            Object.entries(ports).forEach(([portName, localPos]) => {
                 const portEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
                 portEl.setAttribute("r", "5");
                 portEl.setAttribute("cx", localPos.x.toString());
@@ -2105,12 +1893,10 @@ export class SvgGraphEditor
                 portEl.dataset.gateId = gate.id;
                 portEl.dataset.gatePort = portName;
 
-                portEl.addEventListener("mouseenter", () =>
-                {
+                portEl.addEventListener("mouseenter", () => {
                     portEl.setAttribute("r", "7");
                 });
-                portEl.addEventListener("mouseleave", () =>
-                {
+                portEl.addEventListener("mouseleave", () => {
                     portEl.setAttribute("r", "5");
                 });
                 g.appendChild(portEl);
@@ -2123,15 +1909,13 @@ export class SvgGraphEditor
         this.updateGatePositions();
     }
 
-    private updateGatePositions()
-    {
+    private updateGatePositions() {
         const stroke = this.theme.gateStroke || this.theme.nodeStroke || "var(--text-normal)";
         const fill = this.theme.gateFill || this.theme.nodeFill || "var(--background-secondary)";
         const txt = this.theme.text || "var(--text-normal)";
         const activeWireColor = this.theme.wireActive || "#facc15";
 
-        this.gates.forEach(gate =>
-        {
+        this.gates.forEach(gate => {
             const g = this.gateElements.get(gate.id);
             if (!g) return;
             g.setAttribute("transform", `translate(${gate.position.x}, ${gate.position.y})`);
@@ -2144,8 +1928,7 @@ export class SvgGraphEditor
                     : fill;
 
             const bodyPath = g.querySelector("path") as SVGPathElement;
-            if (bodyPath)
-            {
+            if (bodyPath) {
                 bodyPath.setAttribute("d", this.getGateShape(gate.type));
                 bodyPath.setAttribute("fill", gateFill);
                 bodyPath.setAttribute("stroke", stroke);
@@ -2156,24 +1939,20 @@ export class SvgGraphEditor
             const typeLabel = allTexts[0];
             const userLabel = allTexts[1];
 
-            if (typeLabel)
-            {
+            if (typeLabel) {
                 typeLabel.setAttribute("x", "0");
                 typeLabel.setAttribute("y", "0");
                 typeLabel.setAttribute("fill", txt);
-                if (gate.type === "INPUT" || gate.type === "OUTPUT")
-                {
+                if (gate.type === "INPUT" || gate.type === "OUTPUT") {
                     // Show value inside input/output shape
                     typeLabel.setAttribute("font-size", "11");
                     typeLabel.textContent = active ? "1" : "0";
-                } else
-                {
+                } else {
                     typeLabel.setAttribute("font-size", "9");
                     typeLabel.textContent = gate.type;
                 }
             }
-            if (userLabel)
-            {
+            if (userLabel) {
                 userLabel.setAttribute("x", "0");
                 userLabel.setAttribute("y", (GATE_SIZE.h / 2 + 13).toString());
                 userLabel.setAttribute("fill", txt);
@@ -2184,8 +1963,7 @@ export class SvgGraphEditor
 
             // Update port colors
             const portEls = g.querySelectorAll("circle[data-gate-port]");
-            portEls.forEach((el) =>
-            {
+            portEls.forEach((el) => {
                 const portEl = el as SVGCircleElement;
                 const portName = portEl.dataset.gatePort ?? "";
                 const isOut = portName === "out";
@@ -2198,8 +1976,7 @@ export class SvgGraphEditor
         });
 
         // Update wire paths and colors
-        this.wires.forEach(wire =>
-        {
+        this.wires.forEach(wire => {
             const pathEl = this.wireElements.get(wire.id);
             if (!pathEl) return;
             const fromGate = this.gates.find(g => g.id === wire.fromGate);
@@ -2220,25 +1997,19 @@ export class SvgGraphEditor
 
             // Build path: use waypoints if present, else default cubic bezier
             let wirePath: string;
-            if (wire.waypoints && wire.waypoints.length > 0)
-            {
+            if (wire.waypoints && wire.waypoints.length > 0) {
                 const wps = wire.waypoints;
                 let p = `M ${x1} ${y1}`;
-                if (wps.length === 1)
-                {
+                if (wps.length === 1) {
                     const cp = wps[0];
                     const cx = 2 * cp.x - 0.5 * x1 - 0.5 * x2;
                     const cy = 2 * cp.y - 0.5 * y1 - 0.5 * y2;
                     p += ` Q ${cx} ${cy} ${x2} ${y2}`;
-                } else
-                {
-                    wps.forEach((wp, i) =>
-                    {
-                        if (wp.type === "linear")
-                        {
+                } else {
+                    wps.forEach((wp, i) => {
+                        if (wp.type === "linear") {
                             p += ` L ${wp.x} ${wp.y}`;
-                        } else
-                        {
+                        } else {
                             const next = wps[i + 1];
                             const tx = next ? (next.type === "bezier" ? (wp.x + next.x) / 2 : next.x) : x2;
                             const ty = next ? (next.type === "bezier" ? (wp.y + next.y) / 2 : next.y) : y2;
@@ -2248,15 +2019,13 @@ export class SvgGraphEditor
                     if (wps[wps.length - 1].type !== "bezier") p += ` L ${x2} ${y2}`;
                 }
                 wirePath = p;
-            } else
-            {
+            } else {
                 wirePath = `M ${x1} ${y1} C ${x1 + 40} ${y1}, ${x2 - 40} ${y2}, ${x2} ${y2}`;
             }
 
             // Sync hitbox (element before the visible path)
             const hitboxEl = pathEl.previousElementSibling as SVGPathElement;
-            if (hitboxEl?.dataset.wireId === wire.id)
-            {
+            if (hitboxEl?.dataset.wireId === wire.id) {
                 hitboxEl.setAttribute("d", wirePath);
             }
             pathEl.setAttribute("d", wirePath);
@@ -2264,24 +2033,19 @@ export class SvgGraphEditor
             const active = this.simulator.getWireValue(wire);
             pathEl.setAttribute("stroke", active ? activeWireColor : (this.theme.edgeStroke || "var(--text-muted)"));
             pathEl.setAttribute("stroke-width", active ? "2.5" : "2");
-            if (active)
-            {
+            if (active) {
                 pathEl.classList.add("automaton-wire-active");
-            } else
-            {
+            } else {
                 pathEl.classList.remove("automaton-wire-active");
             }
 
             // Draw waypoint handles if wire is bendable
             const handleGroup = pathEl.nextElementSibling as SVGGElement;
-            if (handleGroup && handleGroup.classList.contains("wire-handles"))
-            {
+            if (handleGroup && handleGroup.classList.contains("wire-handles")) {
                 handleGroup.innerHTML = "";
                 handleGroup.style.pointerEvents = wire.isBendable ? "all" : "none";
-                if (wire.isBendable && wire.waypoints)
-                {
-                    wire.waypoints.forEach(wp =>
-                    {
+                if (wire.isBendable && wire.waypoints) {
+                    wire.waypoints.forEach(wp => {
                         const circ = document.createElementNS("http://www.w3.org/2000/svg", "circle");
                         circ.setAttribute("cx", wp.x.toString());
                         circ.setAttribute("cy", wp.y.toString());
@@ -2300,103 +2064,101 @@ export class SvgGraphEditor
         });
     }
 
-    private updateCircuitVisuals()
-    {
+    private updateCircuitVisuals() {
         this.simulator.propagate();
         this.updateGatePositions();
     }
 
     // IEEE gate shapes in local coords centered at 0,0
     private getGateShape(type: GateType): string {
-    const { w, h } = GATE_SIZE;  // w=54, h=40
-    const hw = w / 2, hh = h / 2;
+        const { w, h } = GATE_SIZE;  // w=54, h=40
+        const hw = w / 2, hh = h / 2;
 
-    switch (type) {
-        case 'AND':
-            return [
-                `M ${-hw} ${-hh}`,
-                `L ${0} ${-hh}`,
-                `C ${hw + 4} ${-hh} ${hw + 4} ${hh} ${0} ${hh}`,  // control points pushed out so curve peaks at hw
-                `L ${-hw} ${hh}`,
-                `Z`,
-            ].join(' ');
-        
-        case 'NAND':
-            return [
-                `M ${-hw} ${-hh}`,
-                `L ${0} ${-hh}`,
-                `C ${hw - 1} ${-hh} ${hw - 1} ${hh} ${0} ${hh}`,
-                `L ${-hw} ${hh}`,
-                `Z`,
-                `M ${hw} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-            ].join(' ');
+        switch (type) {
+            case 'AND':
+                return [
+                    `M ${-hw} ${-hh}`,
+                    `L ${0} ${-hh}`,
+                    `C ${hw + 4} ${-hh} ${hw + 4} ${hh} ${0} ${hh}`,  // control points pushed out so curve peaks at hw
+                    `L ${-hw} ${hh}`,
+                    `Z`,
+                ].join(' ');
 
-        case 'OR':
-            return [
-                `M ${-hw} ${-hh}`,
-                `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,   // top: flat-ish top sweeping to tip
-                `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,   // bottom: tip back to bottom-left
-                `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,  // concave left
-                `Z`,
-            ].join(' ');
-        
-        case 'NOR':
-            return [
-                `M ${-hw} ${-hh}`,
-                `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
-                `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,
-                `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,
-                `Z`,
-                `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-            ].join(' ');
-        
-        case 'XOR':
-            return [
-                `M ${-hw + 4} ${-hh}`,
-                `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,
-                `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
-                `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
-                `Z`,
-                // extra back line offset to the left
-                `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
-            ].join(' ');
-        
-        case 'XNOR':
-            return [
-                `M ${-hw + 4} ${-hh}`,
-                `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
-                `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
-                `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
-                `Z`,
-                `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
-                `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-            ].join(' ');
+            case 'NAND':
+                return [
+                    `M ${-hw} ${-hh}`,
+                    `L ${0} ${-hh}`,
+                    `C ${hw - 1} ${-hh} ${hw - 1} ${hh} ${0} ${hh}`,
+                    `L ${-hw} ${hh}`,
+                    `Z`,
+                    `M ${hw} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+                ].join(' ');
 
-        case 'NOT':
-            // Triangle pointing right + bubble
-            return [
-                `M ${-hw} ${-hh}`,
-                `L ${-hw} ${hh}`,
-                `L ${hw - 6} ${0}`,
-                `Z`,
-                `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-            ].join(' ');
+            case 'OR':
+                return [
+                    `M ${-hw} ${-hh}`,
+                    `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,   // top: flat-ish top sweeping to tip
+                    `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,   // bottom: tip back to bottom-left
+                    `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,  // concave left
+                    `Z`,
+                ].join(' ');
 
-        case 'INPUT':
-            return `M ${-hw} ${-hh*0.7} L ${hw*0.6} ${-hh*0.7} L ${hw} 0 L ${hw*0.6} ${hh*0.7} L ${-hw} ${hh*0.7} Z`;
+            case 'NOR':
+                return [
+                    `M ${-hw} ${-hh}`,
+                    `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
+                    `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,
+                    `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,
+                    `Z`,
+                    `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+                ].join(' ');
 
-        case 'OUTPUT':
-            return `M ${-hw} ${-hh*0.7} L ${hw*0.4} ${-hh*0.7} L ${hw} 0 L ${hw*0.4} ${hh*0.7} L ${-hw} ${hh*0.7} Z`;
+            case 'XOR':
+                return [
+                    `M ${-hw + 4} ${-hh}`,
+                    `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,
+                    `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
+                    `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
+                    `Z`,
+                    // extra back line offset to the left
+                    `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
+                ].join(' ');
 
-        default:
-            return `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z`;
+            case 'XNOR':
+                return [
+                    `M ${-hw + 4} ${-hh}`,
+                    `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
+                    `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
+                    `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
+                    `Z`,
+                    `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
+                    `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+                ].join(' ');
+
+            case 'NOT':
+                // Triangle pointing right + bubble
+                return [
+                    `M ${-hw} ${-hh}`,
+                    `L ${-hw} ${hh}`,
+                    `L ${hw - 6} ${0}`,
+                    `Z`,
+                    `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+                ].join(' ');
+
+            case 'INPUT':
+                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.6} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.6} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
+
+            case 'OUTPUT':
+                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.4} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.4} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
+
+            default:
+                return `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z`;
+        }
     }
-}
 
     // ─── WIRING PREVIEW ─────────────────────────────────────────────────────────
 
-    private startWiringPreview(from: { x: number; y: number })
-    {
+    private startWiringPreview(from: { x: number; y: number }) {
         if (this.wiringPreviewLine) this.wiringPreviewLine.remove();
         const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
         line.setAttribute("x1", from.x.toString());
@@ -2411,8 +2173,7 @@ export class SvgGraphEditor
         this.wiringPreviewLine = line;
     }
 
-    private cancelWiring()
-    {
+    private cancelWiring() {
         this.wiringFrom = null;
         this.wiringPreviewLine?.remove();
         this.wiringPreviewLine = null;
@@ -2421,8 +2182,7 @@ export class SvgGraphEditor
 
     // ─── TRUTH TABLE MODAL ──────────────────────────────────────────────────────
 
-    private showTruthTableModal()
-    {
+    private showTruthTableModal() {
         const result = this.simulator.generateTruthTable();
 
         const overlay = document.createElement("div");
@@ -2433,41 +2193,34 @@ export class SvgGraphEditor
         modal.style.maxWidth = "600px";
         modal.createEl("h3", { text: "Truth table", cls: "automaton-modal-title" });
 
-        if (!result)
-        {
+        if (!result) {
             modal.createEl("p", {
                 text: "Add at least one INPUT and one OUTPUT gate to generate a truth table.",
                 cls: "automaton-modal-textarea"
             });
-        } else
-        {
+        } else {
             const table = document.createElement("table");
             table.addClass("automaton-truth-table");
 
             const thead = table.createEl("thead");
             const headerRow = thead.createEl("tr");
-            result.headers.forEach((h, i) =>
-            {
+            result.headers.forEach((h, i) => {
                 const th = headerRow.createEl("th", { text: h });
-                if (i >= result.headers.length - result.rows[0].length + result.rows[0].length - (result.headers.length - (result.rows[0].length - result.headers.length + result.headers.length)))
-                {
+                if (i >= result.headers.length - result.rows[0].length + result.rows[0].length - (result.headers.length - (result.rows[0].length - result.headers.length + result.headers.length))) {
                     th.style.borderLeft = "2px solid var(--background-modifier-border)";
                 }
             });
 
             // Recount: inputs = headers minus outputs
             const inputCount = this.gates.filter(g => g.type === "INPUT").length;
-            Array.from(headerRow.querySelectorAll("th")).forEach((th, i) =>
-            {
+            Array.from(headerRow.querySelectorAll("th")).forEach((th, i) => {
                 if (i === inputCount) th.style.borderLeft = "2px solid var(--background-modifier-border)";
             });
 
             const tbody = table.createEl("tbody");
-            result.rows.forEach(row =>
-            {
+            result.rows.forEach(row => {
                 const tr = tbody.createEl("tr");
-                row.forEach((val, i) =>
-                {
+                row.forEach((val, i) => {
                     const td = tr.createEl("td", { text: val.toString() });
                     td.style.textAlign = "center";
                     td.style.padding = "4px 12px";
@@ -2481,8 +2234,7 @@ export class SvgGraphEditor
             // Copy as markdown button
             const copyBtn = modal.createEl("button", { text: "Copy as markdown", cls: "automaton-modal-button" });
             copyBtn.style.marginTop = "12px";
-            copyBtn.onclick = () =>
-            {
+            copyBtn.onclick = () => {
                 const header = "| " + result.headers.join(" | ") + " |";
                 const sep = "| " + result.headers.map(() => "---").join(" | ") + " |";
                 const rows = result.rows.map(r => "| " + r.join(" | ") + " |").join("\n");
@@ -2509,10 +2261,82 @@ export class SvgGraphEditor
         this.updatePositions();
     }
 
+    // --- WRITING MODE ───────────────────────────────────────────────────────────
+    public enableWritingMode(initialContent = "") {
+    if (this.writingPanel) return;
+
+    const panel = document.createElement("div");
+    panel.classList.add("automaton-writing-panel");
+
+    panel.style.height = "150px";
+    panel.style.borderTop = "1px solid var(--background-modifier-border)";
+    panel.style.display = "flex";
+    panel.style.flexDirection = "column";
+    panel.style.background = "var(--background-secondary)";
+
+    // Textarea
+    const textarea = document.createElement("textarea");
+    textarea.value = initialContent;
+    textarea.placeholder = "Type your graph DSL...";
+    textarea.style.flex = "1";
+    textarea.style.width = "100%";
+    textarea.style.resize = "none";
+    textarea.style.border = "none";
+    textarea.style.outline = "none";
+    textarea.style.padding = "6px";
+    textarea.style.background = "transparent";
+    textarea.style.color = "var(--text-normal)";
+
+    // Buttons row
+    const controls = document.createElement("div");
+    controls.style.display = "flex";
+    controls.style.justifyContent = "space-between";
+    controls.style.padding = "4px";
+
+    const applyBtn = document.createElement("button");
+    applyBtn.textContent = "Apply";
+    applyBtn.onclick = () => {
+        //TODO: this.applyParserOutput(textarea.value);
+    };
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Close";
+    closeBtn.onclick = () => {
+        panel.remove();
+        this.writingPanel = null;
+        this.writingTextarea = null;
+    };
+
+    controls.appendChild(applyBtn);
+    controls.appendChild(closeBtn);
+
+    panel.appendChild(textarea);
+    panel.appendChild(controls);
+
+    this.container.appendChild(panel);
+
+    this.writingPanel = panel;
+    this.writingTextarea = textarea;
+
+    textarea.focus();
+}
+
+    public applyParserOutput(output: ParserOutput) {
+        if (output.nodes) this.nodes = output.nodes;
+        if (output.edges) this.edges = output.edges;
+        if (output.gates) this.gates = output.gates;
+        if (output.wires) this.wires = output.wires;
+        if (output.groups) this.groups = output.groups;
+
+        // Rebuild the DOM and update positions
+        this.buildDOM();
+        this.updatePositions();
+        this.triggerSave();
+    }
+
     // ─── CLEANUP ────────────────────────────────────────────────────────────────
 
-    public destroy()
-    {
+    public destroy() {
         this.contextMenu?.parentNode && this.contextMenu.remove();
     }
 }

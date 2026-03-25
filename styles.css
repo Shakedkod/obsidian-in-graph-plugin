@@ -6,6 +6,8 @@
     direction: ltr;
     user-select: none;
     -webkit-user-select: none;
+    display: flex;
+    flex-direction: column;
 }
 
 .automaton-svg-canvas

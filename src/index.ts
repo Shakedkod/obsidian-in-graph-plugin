@@ -17,8 +17,7 @@ import { InGraphSettingTab } from "./ui/settings";
 *   TODO
 */
 
-interface GraphRecord 
-{
+interface GraphRecord {
     nodes: any[];
     edges: any[];
     gates: any[];
@@ -31,22 +30,41 @@ interface GraphRecord
     editor?: SvgGraphEditor;
 }
 
-export default class InGraphPlugin extends Plugin
-{
+export default class InGraphPlugin extends Plugin {
     settings: InGraphPluginSettings;
 
     private activeGraphs = new Map<string, GraphRecord>();
     private saveTimeout: NodeJS.Timeout | null = null;
+    private lastMousePos = { x: 0, y: 0 };
 
-    async onload(): Promise<void>
-    {
+    async onload(): Promise<void> {
         await this.loadSettings();
         await loadMathJax();
 
         this.addSettingTab(new InGraphSettingTab(this.app, this));
 
-        this.registerMarkdownCodeBlockProcessor("in-graph", async (source, el, ctx) =>
-        {
+        window.addEventListener("mousemove", (e) => {
+            this.lastMousePos = { x: e.clientX, y: e.clientY };
+        });
+
+        this.addCommand({
+            id: "toggle-writing-mode",
+            name: "Toggle Graph Writing Mode",
+            callback: () => {
+                const record = this.getClosestGraph();
+                if (!record?.editor) return;
+
+                record.editor.enableWritingMode();
+            },
+            hotkeys: [
+                {
+                    modifiers: ["Mod", "Shift"],
+                    key: "G"
+                }
+            ]
+        });
+
+        this.registerMarkdownCodeBlockProcessor("in-graph", async (source, el, ctx) => {
             const sectionInfo = ctx.getSectionInfo(el);
             const blockId = sectionInfo?.lineStart.toString() || Math.random().toString();
 
@@ -59,8 +77,7 @@ export default class InGraphPlugin extends Plugin
             let wires: CircuitWire[] = [];
             let groups: GraphGroup[] = [];
 
-            try
-            {
+            try {
                 const data = JSON.parse(source);
                 nodes = data.nodes || [];
                 edges = data.edges || [];
@@ -69,8 +86,7 @@ export default class InGraphPlugin extends Plugin
                 groups = data.groups || [];
                 theme = data.theme;
                 viewport = data.viewport;
-            } catch (e)
-            {
+            } catch (e) {
                 nodes = [{ id: "q0", position: { x: 150, y: 250 }, label: "q0" }];
                 edges = [];
             }
@@ -82,14 +98,12 @@ export default class InGraphPlugin extends Plugin
             let lineStart = -1;
 
             const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-            if (file instanceof TFile)
-            {
+            if (file instanceof TFile) {
                 const rawContent = await this.app.vault.read(file);
                 const rawLines = rawContent.split("\n");
 
                 // Find all opening fences for in-graph blocks
-                for (let i = 0; i < rawLines.length; i++)
-                {
+                for (let i = 0; i < rawLines.length; i++) {
                     const stripped = rawLines[i].replace(/^((?:>\s*)*)/, "");
                     if (!/^```in-graph\s*$/.test(stripped)) continue;
 
@@ -97,13 +111,11 @@ export default class InGraphPlugin extends Plugin
                     const candidatePrefix = rawLines[i].match(/^((?:>\s*)*)/)?.[1] ?? "";
                     const contentLines: string[] = [];
                     let closeI = -1;
-                    for (let j = i + 1; j < rawLines.length; j++)
-                    {
+                    for (let j = i + 1; j < rawLines.length; j++) {
                         const strippedJ = rawLines[j].startsWith(candidatePrefix)
                             ? rawLines[j].slice(candidatePrefix.length)
                             : rawLines[j];
-                        if (/^```\s*$/.test(strippedJ))
-                        {
+                        if (/^```\s*$/.test(strippedJ)) {
                             closeI = j;
                             break;
                         }
@@ -114,8 +126,7 @@ export default class InGraphPlugin extends Plugin
 
                     // Compare against the source Obsidian gave us (trim to be safe)
                     const candidate = contentLines.join("\n").trim();
-                    if (candidate === source.trim())
-                    {
+                    if (candidate === source.trim()) {
                         lineStart = i;
                         linePrefix = candidatePrefix;
                         break;
@@ -123,8 +134,7 @@ export default class InGraphPlugin extends Plugin
                 }
             }
 
-            if (lineStart === -1)
-            {
+            if (lineStart === -1) {
                 // Fallback: shouldn't normally happen
                 console.warn("[in-graph] Could not locate block in raw file, saving disabled for this block");
             }
@@ -135,9 +145,8 @@ export default class InGraphPlugin extends Plugin
             this.activeGraphs.set(blockId, record);
 
             const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], _savedTheme?: GraphTheme,
-                                  savedViewport?: GraphViewport, savedGates?: CircuitGate[], savedWires?: CircuitWire[],
-                                  savedGroups?: GraphGroup[]) =>
-            {
+                savedViewport?: GraphViewport, savedGates?: CircuitGate[], savedWires?: CircuitWire[],
+                savedGroups?: GraphGroup[]) => {
                 record.nodes = savedNodes;
                 record.edges = savedEdges;
                 record.gates = savedGates ?? record.gates;
@@ -156,18 +165,15 @@ export default class InGraphPlugin extends Plugin
             record.editor = editor;
 
             const listenerComponent = new MarkdownRenderChild(el);
-            const handleKeyDown = (e: KeyboardEvent) =>
-            {
-                if ((e.ctrlKey || e.metaKey) && e.key === "s")
-                {
+            const handleKeyDown = (e: KeyboardEvent) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "s") {
                     editor.forceSave();
                     this.batchSaveToFile();
                 }
             };
 
             window.addEventListener("keydown", handleKeyDown, { capture: true });
-            listenerComponent.unload = () =>
-            {
+            listenerComponent.unload = () => {
                 window.removeEventListener("keydown", handleKeyDown, { capture: true });
                 editor.destroy();
                 this.activeGraphs.delete(blockId);
@@ -176,27 +182,45 @@ export default class InGraphPlugin extends Plugin
         });
     }
 
-    getResolvedTheme(blockThemeOverride?: GraphTheme): GraphTheme
-    {
-        if (this.settings.activeTheme === "Custom")
-        {
+    private getClosestGraph(): GraphRecord | null {
+        let closest: GraphRecord | null = null;
+        let minDist = Infinity;
+
+        for (const record of this.activeGraphs.values()) {
+            if (!record.editor) continue;
+
+            const rect = record.editor.container.getBoundingClientRect();
+
+            // Distance from mouse to rectangle (0 if inside)
+            const dx = Math.max(rect.left - this.lastMousePos.x, 0, this.lastMousePos.x - rect.right);
+            const dy = Math.max(rect.top - this.lastMousePos.y, 0, this.lastMousePos.y - rect.bottom);
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < minDist) {
+                minDist = dist;
+                closest = record;
+            }
+        }
+
+        return closest;
+    }
+
+    getResolvedTheme(blockThemeOverride?: GraphTheme): GraphTheme {
+        if (this.settings.activeTheme === "Custom") {
             return { ...this.settings.customTheme, ...blockThemeOverride };
         }
         const preset = THEME_PRESETS.find(p => p.name === this.settings.activeTheme);
         return { ...(preset?.theme ?? {}), ...blockThemeOverride };
     }
 
-    private batchSaveToFile()
-    {
+    private batchSaveToFile() {
         if (this.saveTimeout) clearTimeout(this.saveTimeout);
 
-        this.saveTimeout = setTimeout(async () =>
-        {
+        this.saveTimeout = setTimeout(async () => {
             const file = this.app.workspace.getActiveFile();
             if (!file || this.activeGraphs.size === 0) return;
 
-            await this.app.vault.process(file, (data) =>
-            {
+            await this.app.vault.process(file, (data) => {
                 const lines = data.split("\n");
 
                 // Sort records top-to-bottom so line offsets are applied in order
@@ -206,27 +230,23 @@ export default class InGraphPlugin extends Plugin
 
                 let lineOffset = 0; // accumulate shifts from earlier splices
 
-                for (const record of records)
-                {
+                for (const record of records) {
                     const absOpen = record.lineStart + lineOffset;
                     const p = record.linePrefix;
 
                     // Sanity check: the line must still be our opening fence
                     const openLine = lines[absOpen] ?? "";
                     const openStripped = openLine.startsWith(p) ? openLine.slice(p.length) : openLine;
-                    if (!/^```in-graph\s*$/.test(openStripped))
-                    {
+                    if (!/^```in-graph\s*$/.test(openStripped)) {
                         console.warn(`[in-graph] Fence not found at line ${absOpen} (got: "${openLine}"), skipping`);
                         continue;
                     }
 
                     // Find the closing fence — must have exactly the same prefix
                     let closeIdx = -1;
-                    for (let i = absOpen + 1; i < lines.length; i++)
-                    {
+                    for (let i = absOpen + 1; i < lines.length; i++) {
                         const s = lines[i].startsWith(p) ? lines[i].slice(p.length) : lines[i];
-                        if (/^```\s*$/.test(s))
-                        {
+                        if (/^```\s*$/.test(s)) {
                             closeIdx = i;
                             break;
                         }
@@ -234,8 +254,7 @@ export default class InGraphPlugin extends Plugin
                         if (/^```\w/.test(s)) break;
                     }
 
-                    if (closeIdx === -1)
-                    {
+                    if (closeIdx === -1) {
                         console.warn(`[in-graph] No closing fence for block at line ${absOpen}`);
                         continue;
                     }
@@ -266,19 +285,16 @@ export default class InGraphPlugin extends Plugin
         }, 50);
     }
 
-    async loadSettings(): Promise<void>
-    {
+    async loadSettings(): Promise<void> {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
 
-    async saveSettings(): Promise<void>
-    {
+    async saveSettings(): Promise<void> {
         await this.saveData(this.settings);
         this.refreshAllGraphThemes();
     }
 
-    private refreshAllGraphThemes() 
-    {
+    private refreshAllGraphThemes() {
         for (const [, record] of this.activeGraphs) {
             if (!record.editor) continue;
             const newTheme = this.getResolvedTheme(record.theme);
