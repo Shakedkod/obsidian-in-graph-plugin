@@ -1,4 +1,4 @@
-import { CircuitGate, CircuitWire } from "./circuits";
+import { CircuitGate, CircuitWire, GateType } from "./circuits";
 import { GraphEdge, GraphGroup, GraphNode } from "./graph";
 
 export interface ParserOutput 
@@ -10,24 +10,69 @@ export interface ParserOutput
     groups?: GraphGroup[];
 }
 
-export interface Group
+export interface ParserNode
+{
+    id: string;
+    label: string;
+    color?: string;
+    shape: "circle" | "doublecircle" | "rectangle";
+    isStart?: boolean;
+    isAccepting?: boolean;
+}
+
+export interface ParserGate
+{
+    id: string;
+    type: GateType;
+    label?: string;
+    color?: string;
+    active: boolean;
+}
+
+export interface ParserGroup
 {
     id: string;
     name: string;
-    nodes: GraphNode[];
-    gates: CircuitGate[];
-    groups: Group[];
+    nodes: ParserNode[];
+    gates: ParserGate[];
+    groups: ParserGroup[];
+}
+
+export interface ParserWire
+{
+    id: string;
+    from: string;
+    to: string;
+    label?: string;
+    style?: string;
+    color?: string;
+    active: boolean;
+}
+
+export interface ParserEdge
+{
+    id: string;
+    from: string;
+    to: string;
+    label?: string;
+    style?: string;
+    color?: string;
 }
 
 export interface ParserInner
 {
-    nodes: GraphNode[];
-    edges: GraphEdge[];
-    gates: CircuitGate[];
-    wires: CircuitWire[];
-    groups: Group[];
+    nodes: ParserNode[];
+    edges: ParserEdge[];
+    gates: ParserGate[];
+    wires: ParserWire[];
+    groups: ParserGroup[];
     layout: {
         columns: string[][];
         rows: string[][];
     }
 }
+
+export const NODE_SPACING_X = 120;
+export const NODE_SPACING_Y = 100;
+export const START_X = 100;
+export const START_Y = 100;

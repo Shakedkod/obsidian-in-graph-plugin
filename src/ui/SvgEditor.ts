@@ -4,6 +4,7 @@ import { DEFAULT_THEME, GraphTheme } from "../models/theme";
 import { CircuitGate, CircuitWire, GATE_SIZE, GateType } from "../models/circuits";
 import { CircuitSimulator, getPortPositions } from "../services/circuitSimulator";
 import { ParserOutput } from "src/models/parser";
+import parseDSL, { serializeToDSL } from "src/services/DslParser";
 
 export class SvgGraphEditor {
     static persistedMode = "none";
@@ -71,6 +72,9 @@ export class SvgGraphEditor {
     private writingPanel: HTMLDivElement | null = null;
     private writingTextarea: HTMLTextAreaElement | null = null;
 
+    // Alignment guides
+    private guideLayer: SVGGElement;
+
     private onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void;
     private onManualSave: () => void;
 
@@ -109,6 +113,9 @@ export class SvgGraphEditor {
         this.svgWrapper.style.flex = "1";
         this.svgWrapper.style.minHeight = "0";
         this.svgWrapper.style.position = "relative";
+
+        this.guideLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        this.svg.appendChild(this.guideLayer);
 
         this.svgWrapper.appendChild(this.svg);
         this.container.appendChild(this.svgWrapper);
@@ -2263,63 +2270,63 @@ export class SvgGraphEditor {
 
     // --- WRITING MODE ───────────────────────────────────────────────────────────
     public enableWritingMode(initialContent = "") {
-    if (this.writingPanel) return;
+        if (this.writingPanel) return;
 
-    const panel = document.createElement("div");
-    panel.classList.add("automaton-writing-panel");
+        const panel = document.createElement("div");
+        panel.classList.add("automaton-writing-panel");
 
-    panel.style.height = "150px";
-    panel.style.borderTop = "1px solid var(--background-modifier-border)";
-    panel.style.display = "flex";
-    panel.style.flexDirection = "column";
-    panel.style.background = "var(--background-secondary)";
+        panel.style.height = "150px";
+        panel.style.borderTop = "1px solid var(--background-modifier-border)";
+        panel.style.display = "flex";
+        panel.style.flexDirection = "column";
+        panel.style.background = "var(--background-secondary)";
 
-    // Textarea
-    const textarea = document.createElement("textarea");
-    textarea.value = initialContent;
-    textarea.placeholder = "Type your graph DSL...";
-    textarea.style.flex = "1";
-    textarea.style.width = "100%";
-    textarea.style.resize = "none";
-    textarea.style.border = "none";
-    textarea.style.outline = "none";
-    textarea.style.padding = "6px";
-    textarea.style.background = "transparent";
-    textarea.style.color = "var(--text-normal)";
+        // Textarea
+        const textarea = document.createElement("textarea");
+        textarea.value = initialContent;
+        textarea.placeholder = "Type your graph DSL...";
+        textarea.style.flex = "1";
+        textarea.style.width = "100%";
+        textarea.style.resize = "none";
+        textarea.style.border = "none";
+        textarea.style.outline = "none";
+        textarea.style.padding = "6px";
+        textarea.style.background = "transparent";
+        textarea.style.color = "var(--text-normal)";
 
-    // Buttons row
-    const controls = document.createElement("div");
-    controls.style.display = "flex";
-    controls.style.justifyContent = "space-between";
-    controls.style.padding = "4px";
+        // Buttons row
+        const controls = document.createElement("div");
+        controls.style.display = "flex";
+        controls.style.justifyContent = "space-between";
+        controls.style.padding = "4px";
 
-    const applyBtn = document.createElement("button");
-    applyBtn.textContent = "Apply";
-    applyBtn.onclick = () => {
-        //TODO: this.applyParserOutput(textarea.value);
-    };
+        const applyBtn = document.createElement("button");
+        applyBtn.textContent = "Apply";
+        applyBtn.onclick = () => {
+            this.applyParserOutput(parseDSL(textarea.value));
+        };
 
-    const closeBtn = document.createElement("button");
-    closeBtn.textContent = "Close";
-    closeBtn.onclick = () => {
-        panel.remove();
-        this.writingPanel = null;
-        this.writingTextarea = null;
-    };
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "Close";
+        closeBtn.onclick = () => {
+            panel.remove();
+            this.writingPanel = null;
+            this.writingTextarea = null;
+        };
 
-    controls.appendChild(applyBtn);
-    controls.appendChild(closeBtn);
+        controls.appendChild(applyBtn);
+        controls.appendChild(closeBtn);
 
-    panel.appendChild(textarea);
-    panel.appendChild(controls);
+        panel.appendChild(textarea);
+        panel.appendChild(controls);
 
-    this.container.appendChild(panel);
+        this.container.appendChild(panel);
 
-    this.writingPanel = panel;
-    this.writingTextarea = textarea;
+        this.writingPanel = panel;
+        this.writingTextarea = textarea;
 
-    textarea.focus();
-}
+        textarea.focus();
+    }
 
     public applyParserOutput(output: ParserOutput) {
         if (output.nodes) this.nodes = output.nodes;
@@ -2332,6 +2339,46 @@ export class SvgGraphEditor {
         this.buildDOM();
         this.updatePositions();
         this.triggerSave();
+    }
+
+    private onGraphChanged() {
+        const dsl = serializeToDSL({
+            nodes: this.nodes,
+            edges: this.edges,
+            gates: this.gates,
+            wires: this.wires,
+            groups: this.groups
+        });
+
+        this.writingTextarea.value = dsl;
+    }
+
+    // --- ALIGNMENT GUIDES ────────────────────────────────────────────────────────────
+
+    private renderGuides(guides: { x?: number, y?: number }) {
+        this.guideLayer.innerHTML = "";
+
+        if (guides.x !== undefined) {
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", guides.x.toString());
+            line.setAttribute("x2", guides.x.toString());
+            line.setAttribute("y1", "0");
+            line.setAttribute("y2", "1000");
+            line.setAttribute("stroke", "cyan");
+            line.setAttribute("stroke-dasharray", "4");
+            this.guideLayer.appendChild(line);
+        }
+
+        if (guides.y !== undefined) {
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("y1", guides.y.toString());
+            line.setAttribute("y2", guides.y.toString());
+            line.setAttribute("x1", "0");
+            line.setAttribute("x2", "1000");
+            line.setAttribute("stroke", "cyan");
+            line.setAttribute("stroke-dasharray", "4");
+            this.guideLayer.appendChild(line);
+        }
     }
 
     // ─── CLEANUP ────────────────────────────────────────────────────────────────
