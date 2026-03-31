@@ -15,13 +15,33 @@ export class InGraphSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl("h2", { text: "In-Graph settings" });
+        containerEl.addClass("automaton-settings-root");
+
+        const header = containerEl.createDiv({ cls: "automaton-settings-header" });
+        header.createEl("h2", { text: "In-Graph settings" });
+        header.createEl("p", {
+            text: "Tune visuals, editing behavior, and keyboard flow for in-graph blocks.",
+            cls: "automaton-settings-intro"
+        });
+
+        const createSection = (title: string, desc?: string, isOpen = true) => {
+            const section = containerEl.createEl("details", { cls: "automaton-settings-section" });
+            if (isOpen) section.setAttr("open", "");
+
+            const summary = section.createEl("summary", { cls: "automaton-settings-section-summary" });
+            summary.createEl("h3", { text: title, cls: "automaton-settings-section-title" });
+
+            const content = section.createDiv({ cls: "automaton-settings-section-content" });
+            if (desc) content.createEl("p", { text: desc, cls: "automaton-settings-section-desc" });
+
+            return content;
+        };
 
         // ─── SECTION: Appearance ─────────────────────────────────────────────────
 
-        containerEl.createEl("h3", { text: "Appearance" });
+        const appearanceSection = createSection("Appearance", "Choose a preset theme or customize every color token.");
 
-        new Setting(containerEl)
+        new Setting(appearanceSection)
             .setName("Theme")
             .setDesc("Visual style for all graphs. Individual graphs can still override this.")
             .addDropdown(drop => {
@@ -37,13 +57,13 @@ export class InGraphSettingTab extends PluginSettingTab {
             });
 
         // Live preview
-        const previewWrap = containerEl.createDiv({ cls: "automaton-settings-preview-wrap" });
+        const previewWrap = appearanceSection.createDiv({ cls: "automaton-settings-preview-wrap" });
         previewWrap.createEl("p", { text: "Preview", cls: "automaton-settings-preview-label" });
         const previewEl = previewWrap.createDiv({ cls: "automaton-settings-preview" });
         this.renderPreview(previewEl, this.plugin.settings.activeTheme);
 
         // Custom theme color pickers
-        const customSection = containerEl.createDiv({ cls: "automaton-custom-theme-section" });
+        const customSection = appearanceSection.createDiv({ cls: "automaton-custom-theme-section" });
         this.customColorRows = [];
 
         const colorFields: { key: keyof GraphTheme; label: string; desc: string }[] = [
@@ -81,9 +101,9 @@ export class InGraphSettingTab extends PluginSettingTab {
 
         // ─── SECTION: DSL editor ─────────────────────────────────────────────────
 
-        containerEl.createEl("h3", { text: "DSL editor" });
+        const dslSection = createSection("DSL editor", "Control where the DSL panel opens and how parsed wires are routed.");
 
-        new Setting(containerEl)
+        new Setting(dslSection)
             .setName("Panel position")
             .setDesc("Where the DSL text editor appears when opened.")
             .addDropdown(drop => {
@@ -96,7 +116,7 @@ export class InGraphSettingTab extends PluginSettingTab {
                 });
             });
 
-        new Setting(containerEl)
+        new Setting(dslSection)
             .setName("Click canvas to open DSL editor")
             .setDesc("Clicking the graph background opens the DSL panel automatically.")
             .addToggle(tog => {
@@ -107,11 +127,22 @@ export class InGraphSettingTab extends PluginSettingTab {
                 });
             });
 
+        new Setting(dslSection)
+            .setName("Straight wire routing")
+            .setDesc("Route circuit wires as 90° L-shapes instead of curves when building from DSL.")
+            .addToggle(tog => {
+                tog.setValue(this.plugin.settings.straightWires ?? false);
+                tog.onChange(async (val) => {
+                    this.plugin.settings.straightWires = val;
+                    await this.plugin.saveSettings();
+                });
+            });
+
         // ─── SECTION: Behaviour ──────────────────────────────────────────────────
 
-        containerEl.createEl("h3", { text: "Behaviour" });
+        const behaviorSection = createSection("Behaviour", "Set defaults for undo depth and graph sizing.");
 
-        new Setting(containerEl)
+        new Setting(behaviorSection)
             .setName("Undo history size")
             .setDesc("Maximum undo steps stored per graph (10–200). Higher values use more memory.")
             .addSlider(sl => {
@@ -124,7 +155,7 @@ export class InGraphSettingTab extends PluginSettingTab {
                 });
             });
 
-        new Setting(containerEl)
+        new Setting(behaviorSection)
             .setName("Default graph height")
             .setDesc("Height in pixels for new graphs that have no saved viewport.")
             .addSlider(sl => {
@@ -139,15 +170,16 @@ export class InGraphSettingTab extends PluginSettingTab {
 
         // ─── SECTION: Keyboard shortcuts reference ────────────────────────────────
 
-        containerEl.createEl("h3", { text: "Keyboard shortcuts" });
+        const shortcutsSection = createSection("Keyboard shortcuts", undefined, false);
 
-        containerEl.createEl("p", {
+        shortcutsSection.createEl("p", {
             text: "Commands can be remapped in Settings → Hotkeys.",
-            cls: "setting-item-description"
+            cls: "setting-item-description automaton-settings-section-desc"
         });
 
         const shortcuts: { keys: string; action: string }[] = [
             { keys: "Ctrl+Shift+G",          action: "Toggle DSL editor (nearest graph)" },
+            { keys: "Ctrl+Shift+Enter",      action: "Apply DSL text (nearest graph)" },
             { keys: "Ctrl+S",                action: "Save graph to file" },
             { keys: "Ctrl+Z",                action: "Undo last change" },
             { keys: "Double-click node",     action: "Edit label inline" },
@@ -158,14 +190,11 @@ export class InGraphSettingTab extends PluginSettingTab {
             { keys: "Shift+click",           action: "Add node/gate to selection" },
         ];
 
-        const table = containerEl.createEl("table");
-        table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px";
+        const table = shortcutsSection.createEl("table", { cls: "automaton-shortcuts-table" });
         shortcuts.forEach(({ keys, action }) => {
-            const tr = table.createEl("tr");
-            const tdKey = tr.createEl("td", { text: keys });
-            tdKey.style.cssText = "padding:4px 16px 4px 0;font-family:var(--font-monospace);white-space:nowrap;color:var(--text-accent)";
-            const tdAct = tr.createEl("td", { text: action });
-            tdAct.style.cssText = "padding:4px 0;color:var(--text-muted)";
+            const tr = table.createEl("tr", { cls: "automaton-shortcuts-row" });
+            tr.createEl("td", { text: keys, cls: "automaton-shortcuts-keys" });
+            tr.createEl("td", { text: action, cls: "automaton-shortcuts-action" });
         });
     }
 
@@ -193,12 +222,11 @@ export class InGraphSettingTab extends PluginSettingTab {
         const accept = theme.acceptCircle || stroke;
         const start  = theme.startArrow   || stroke;
 
-        container.style.background = bg;
+        container.style.setProperty("--automaton-preview-bg", bg);
 
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.setAttribute("viewBox", "0 0 260 100");
-        svg.style.width = "100%";
-        svg.style.height = "100px";
+        svg.addClass("automaton-settings-preview-svg");
 
         // Start arrow
         const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");

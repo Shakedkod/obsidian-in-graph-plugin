@@ -7,6 +7,7 @@ export interface InGraphPluginSettings {
     clickBgOpensDsl: boolean;
     maxHistory: number;
     defaultHeight: number;
+    straightWires?: boolean;
 }
 
 export const DEFAULT_SETTINGS: InGraphPluginSettings = {
@@ -22,6 +23,7 @@ export const DEFAULT_SETTINGS: InGraphPluginSettings = {
     },
     dslMode: "bottom",
     clickBgOpensDsl: true,
+    straightWires: true,
     maxHistory: 50,
     defaultHeight: 300
 };

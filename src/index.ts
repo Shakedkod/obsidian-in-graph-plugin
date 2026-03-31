@@ -7,16 +7,6 @@ import { DEFAULT_SETTINGS } from "./models/settings";
 import { CircuitGate, CircuitWire } from "./models/circuits";
 import { InGraphSettingTab } from "./ui/settings";
 
-/*
-* TODO
-*  TODO
-*   TODO: Set the circle radius in automatons states to be the default or if the text is longer, bigger than the
-*     default.
-* TODO
-*  TODO
-*   TODO
-*/
-
 interface GraphRecord {
     nodes: any[];
     edges: any[];
@@ -60,6 +50,23 @@ export default class InGraphPlugin extends Plugin {
                 {
                     modifiers: ["Mod", "Shift"],
                     key: "G"
+                }
+            ]
+        });
+
+        this.addCommand({
+            id: "apply-writing-mode-dsl",
+            name: "Apply Graph DSL (Nearest Graph)",
+            callback: () => {
+                const record = this.getClosestGraph();
+                if (!record?.editor) return;
+
+                record.editor.applyOpenDslText();
+            },
+            hotkeys: [
+                {
+                    modifiers: ["Mod", "Shift"],
+                    key: "Enter"
                 }
             ]
         });
@@ -162,7 +169,8 @@ export default class InGraphPlugin extends Plugin {
                 onSave,
                 () => this.batchSaveToFile(),
                 this.settings.dslMode ?? "bottom",
-                this.settings.clickBgOpensDsl ?? false
+                this.settings.clickBgOpensDsl ?? false,
+                this.settings.straightWires ?? false
             );
             record.editor = editor;
 

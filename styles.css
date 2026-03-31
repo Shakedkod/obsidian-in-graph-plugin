@@ -522,30 +522,10 @@ path[stroke="rgba(0,0,0,0.01)"]
     transition: background 0.1s;
 }
 
-.automaton-context-menu-item:hover
-{
-    
-}
-
-.automaton-context-menu-item-error
-{
-    
-}
-
-.automaton-context-menu-item-error:hover
-{
-    
-}
-
-.automaton-context-menu-accent
-{
-    
-}
-
 .automaton-context-menu-divider
 {
     height: 1px;
-    
+    background: var(--background-modifier-border);
     margin: 3px 0;
 }
 
@@ -600,10 +580,6 @@ path[stroke="rgba(0,0,0,0.01)"]
     color: var(--text-normal);
 }
 
-.automaton-truth-table tr:nth-child(even) td
-{
-}
-
 .automaton-truth-table td, .automaton-truth-table th
 {
     border: none;
@@ -613,6 +589,152 @@ path[stroke="rgba(0,0,0,0.01)"]
 circle[data-gate-port]
 {
     transition: r 0.1s;
+}
+
+/* Settings tab layout */
+.automaton-settings-root
+{
+    --automaton-settings-radius: 10px;
+}
+
+.automaton-settings-header
+{
+    padding: 6px 2px 14px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    margin-bottom: 12px;
+}
+
+.automaton-settings-header h2
+{
+    margin: 0;
+}
+
+.automaton-settings-intro
+{
+    margin: 6px 0 0;
+    color: var(--text-muted);
+    max-width: 62ch;
+}
+
+.automaton-settings-section
+{
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--automaton-settings-radius);
+    background: color-mix(in srgb, var(--background-secondary) 35%, transparent);
+    margin: 0 0 12px;
+    overflow: hidden;
+}
+
+.automaton-settings-section-summary
+{
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 12px;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.automaton-settings-section-summary::-webkit-details-marker
+{
+    display: none;
+}
+
+.automaton-settings-section-summary::after
+{
+    content: "▸";
+    color: var(--text-muted);
+    font-size: 12px;
+    transition: transform 0.15s ease;
+}
+
+.automaton-settings-section[open] .automaton-settings-section-summary
+{
+    border-bottom-color: color-mix(in srgb, var(--background-modifier-border) 80%, transparent);
+}
+
+.automaton-settings-section[open] .automaton-settings-section-summary::after
+{
+    transform: rotate(90deg);
+}
+
+.automaton-settings-section-content
+{
+    padding: 2px 12px 10px;
+}
+
+.automaton-settings-section-content .setting-item
+{
+    border-top-color: color-mix(in srgb, var(--background-modifier-border) 80%, transparent);
+}
+
+.automaton-settings-section-title
+{
+    margin: 0;
+    font-size: 14px;
+}
+
+.automaton-settings-section-desc
+{
+    margin: 4px 0 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.automaton-settings-preview-wrap
+{
+    margin: 10px 0 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.automaton-settings-preview
+{
+    padding: 8px;
+    background: var(--automaton-preview-bg, var(--background-primary));
+}
+
+.automaton-settings-preview-svg
+{
+    width: 100%;
+    height: 100px;
+    display: block;
+}
+
+.automaton-shortcuts-table
+{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.automaton-shortcuts-row
+{
+    border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent);
+}
+
+.automaton-shortcuts-row:first-child
+{
+    border-top: none;
+}
+
+.automaton-shortcuts-keys
+{
+    padding: 7px 16px 7px 0;
+    font-family: var(--font-monospace);
+    white-space: nowrap;
+    color: var(--text-accent);
+    vertical-align: top;
+}
+
+.automaton-shortcuts-action
+{
+    padding: 7px 0;
+    color: var(--text-muted);
 }
 
 /* ─── SUBMENU ─── */
@@ -664,10 +786,6 @@ circle[data-gate-port]
     text-align: center;
     font-weight: 600;
     color: var(--text-normal);
-}
-
-.automaton-truth-table tr:nth-child(even) td
-{
 }
 
 .automaton-truth-table td,

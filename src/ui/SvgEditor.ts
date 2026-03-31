@@ -15,6 +15,7 @@ export class SvgGraphEditor {
     private contextMenu: HTMLDivElement;
     private unsavedDot: HTMLDivElement;
     private svgWrapper: HTMLDivElement;
+    private contentArea: HTMLDivElement;
 
     private viewBox = { x: 0, y: 0, w: 800, h: 500 };
     private isPanning = false;
@@ -82,9 +83,7 @@ export class SvgGraphEditor {
     private writingTextarea: HTMLTextAreaElement | null = null;
     private dslMode: "bottom" | "sidebar" = "bottom";
     private clickBgOpensDsl = false;
-
-    // Alignment guides
-    private guideLayer: SVGGElement;
+    private straightWires = false;
 
     private onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void;
     private onManualSave: () => void;
@@ -101,7 +100,8 @@ export class SvgGraphEditor {
         onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void,
         onManualSave: () => void,
         dslMode: "bottom" | "sidebar" = "bottom",
-        clickBgOpensDsl = false
+        clickBgOpensDsl = false,
+        straightWires = false
     ) {
         this.container = container;
         this.container.addClass("automaton-graph-container");
@@ -120,20 +120,32 @@ export class SvgGraphEditor {
         this.onManualSave = onManualSave;
         this.dslMode = dslMode;
         this.clickBgOpensDsl = clickBgOpensDsl;
+        this.straightWires = straightWires;
         this.theme = { ...DEFAULT_THEME, ...userTheme };
+
+        // container is always flex-col: toolbar on top, contentArea below
+        this.container.style.display = "flex";
+        this.container.style.flexDirection = "column";
 
         this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         this.svg.classList.add("automaton-svg-canvas");
         this.svgWrapper = document.createElement("div");
         this.svgWrapper.style.flex = "1";
+        this.svgWrapper.style.minWidth = "0";
         this.svgWrapper.style.minHeight = "0";
         this.svgWrapper.style.position = "relative";
 
-        this.guideLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
-        this.svg.appendChild(this.guideLayer);
+        // contentArea holds svgWrapper + writing panel; switches flex direction for sidebar
+        this.contentArea = document.createElement("div");
+        this.contentArea.style.display = "flex";
+        this.contentArea.style.flexDirection = "column";
+        this.contentArea.style.flex = "1";
+        this.contentArea.style.minHeight = "0";
+        this.contentArea.style.overflow = "hidden";
 
         this.svgWrapper.appendChild(this.svg);
-        this.container.appendChild(this.svgWrapper);
+        this.contentArea.appendChild(this.svgWrapper);
+        this.container.appendChild(this.contentArea);
 
         if (initialViewport?.viewBox) {
             this.viewBox = { ...initialViewport.viewBox };
@@ -296,7 +308,7 @@ export class SvgGraphEditor {
             const b = document.createElement("button");
             b.title = title;
             b.innerHTML = svg;
-            b.className = "automaton-toolbar-btn";
+            b.className = "automaton-toolbar-button";
             b.onmouseenter = () => { b.style.background = "var(--background-modifier-hover)"; b.style.color = "var(--text-normal)"; };
             b.onmouseleave = () => { b.style.background = "transparent"; b.style.color = "var(--text-muted)"; };
             b.onclick = (e) => { e.stopPropagation(); onClick(); };
@@ -330,8 +342,8 @@ export class SvgGraphEditor {
         // ── DSL editor toggle ──
         btn("Toggle DSL editor (Ctrl+Shift+G)", I('<rect x="1" y="2" width="14" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="9" x2="8" y2="9" stroke="currentColor" stroke-width="1.3"/>'), () => this.toggleWritingMode());
 
-        // Insert toolbar before svgWrapper
-        this.container.insertBefore(bar, this.svgWrapper);
+        // Insert toolbar before contentArea so it's always at the top
+        this.container.insertBefore(bar, this.contentArea);
         this.toolbar = bar;
     }
 
@@ -460,7 +472,7 @@ export class SvgGraphEditor {
         resizer.className = "obsidian-automaton-resizer";
         resizer.onmouseenter = () => resizer.style.backgroundColor = "var(--interactive-accent)";
         resizer.onmouseleave = () => resizer.style.backgroundColor = "transparent";
-        this.container.appendChild(resizer);
+        this.contentArea.appendChild(resizer);
 
         let isResizing = false, startY = 0, startHeight = 0, startViewBoxH = 0, scaleY = 1;
 
@@ -638,7 +650,10 @@ export class SvgGraphEditor {
     } {
         const sx = sourceNode.position.x, sy = sourceNode.position.y;
         const tx = targetNode.position.x, ty = targetNode.position.y;
-        const radius = 25;
+        // Use per-node radius if set (dynamic sizing), else default
+        const srcR = sourceNode.radius ?? 25;
+        const tgtR = targetNode.radius ?? 25;
+        const radius = srcR; // used for start-side; tgtR used for end-side below
 
         const getNormal = (dx: number, dy: number) => {
             const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -761,8 +776,8 @@ export class SvgGraphEditor {
         if (hasReverse) {
             const startX = sx + Math.cos(angle + 0.35) * radius;
             const startY = sy + Math.sin(angle + 0.35) * radius;
-            const endX = tx + Math.cos(angle + Math.PI - 0.35) * radius;
-            const endY = ty + Math.sin(angle + Math.PI - 0.35) * radius;
+            const endX = tx + Math.cos(angle + Math.PI - 0.35) * tgtR;
+            const endY = ty + Math.sin(angle + Math.PI - 0.35) * tgtR;
             const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
             const dist = Math.sqrt(dx * dx + dy * dy);
             const { nx, ny } = getNormal(dx, dy);
@@ -776,7 +791,7 @@ export class SvgGraphEditor {
 
         // 4. STRAIGHT LINE
         const startX = sx + Math.cos(angle) * radius, startY = sy + Math.sin(angle) * radius;
-        const endX = tx - Math.cos(angle) * radius, endY = ty - Math.sin(angle) * radius;
+        const endX = tx - Math.cos(angle) * tgtR, endY = ty - Math.sin(angle) * tgtR;
         const { nx, ny } = getNormal(dx, dy);
         const hx = (startX + endX) / 2, hy = (startY + endY) / 2;
         return {
@@ -934,11 +949,15 @@ export class SvgGraphEditor {
             const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
             group.style.cursor = "pointer";
             group.dataset.nodeId = node.id;
+            const r = node.radius ?? 25;
+            const innerR = Math.max(r - 5, r * 0.8);
+            const arrowTip = -r;
+            const arrowBase = -(r + 20);
 
             const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
             circle.setAttribute("cx", "0");
             circle.setAttribute("cy", "0");
-            circle.setAttribute("r", "25");
+            circle.setAttribute("r", String(r));
             circle.setAttribute("stroke", node.isAccepting ? (this.theme.acceptCircle || nodeColor) : nodeColor);
             circle.setAttribute("fill", this.theme.nodeFill || "var(--background-primary)");
             circle.setAttribute("stroke-width", "2");
@@ -946,7 +965,7 @@ export class SvgGraphEditor {
 
             if (node.isAccepting) {
                 const inner = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-                inner.setAttribute("r", "20");
+                inner.setAttribute("r", String(Math.round(innerR)));
                 inner.setAttribute("fill", "none");
                 inner.setAttribute("stroke", this.theme.acceptCircle || nodeColor);
                 inner.setAttribute("stroke-width", "2");
@@ -955,7 +974,7 @@ export class SvgGraphEditor {
 
             if (node.isStart) {
                 const startArrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                startArrow.setAttribute("d", "M -45 0 L -25 0 M -30 -5 L -25 0 L -30 5");
+                startArrow.setAttribute("d", `M ${arrowBase} 0 L ${arrowTip} 0 M ${arrowTip - 5} -5 L ${arrowTip} 0 L ${arrowTip - 5} 5`);
                 startArrow.setAttribute("fill", "none");
                 startArrow.setAttribute("stroke", this.theme.startArrow || nodeColor);
                 startArrow.setAttribute("stroke-width", "2");
@@ -1827,7 +1846,7 @@ export class SvgGraphEditor {
             // Clear selection when clicking empty canvas
             if (!nodeGroup && !gateGroup && !portEl && !wpHandle && !wireWpEl) {
                 if (!evt.shiftKey) this.clearSelection();
-                if (this.clickBgOpensDsl && !this.writingPanel) this.toggleWritingMode();
+                if (this.clickBgOpensDsl && !this.writingPanel && evt.button === 0) this.toggleWritingMode();
             }
         });
 
@@ -2508,7 +2527,7 @@ export class SvgGraphEditor {
         closeBtn.onclick = () => overlay.remove();
 
         overlay.appendChild(modal);
-        this.container.appendChild(overlay);
+        document.appendChild(overlay);
     }
 
     public applyTheme(newTheme: GraphTheme) {
@@ -2523,7 +2542,7 @@ export class SvgGraphEditor {
             this.writingPanel.remove();
             this.writingPanel = null;
             this.writingTextarea = null;
-            this.container.style.flexDirection = "";
+            this.contentArea.style.flexDirection = "column";
             return;
         }
 
@@ -2533,7 +2552,7 @@ export class SvgGraphEditor {
             gates: this.gates,
             wires: this.wires,
             groups: this.groups
-        } as any);
+        });
 
         const isSidebar = this.dslMode === "sidebar";
 
@@ -2548,11 +2567,12 @@ export class SvgGraphEditor {
             panel.style.minWidth = "160px";
             panel.style.borderLeft = "1px solid var(--background-modifier-border)";
             panel.style.overflow = "auto";
-            this.container.style.display = "flex";
-            this.container.style.flexDirection = "row";
+            // Only contentArea goes row; container (and toolbar) stay column
+            this.contentArea.style.flexDirection = "row";
         } else {
             panel.style.height = "150px";
             panel.style.borderTop = "1px solid var(--background-modifier-border)";
+            this.contentArea.style.flexDirection = "column";
         }
 
         // Textarea
@@ -2574,7 +2594,7 @@ export class SvgGraphEditor {
         textarea.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                 e.preventDefault();
-                this.applyParserOutput(parseDSL(textarea.value));
+                this.applyParserOutput(parseDSL(textarea.value, { straightWires: this.straightWires }));
             }
         });
 
@@ -2584,8 +2604,9 @@ export class SvgGraphEditor {
 
         const applyBtn = document.createElement("button");
         applyBtn.textContent = "Apply";
+        applyBtn.title = "Apply DSL (Ctrl+Shift+Enter)";
         applyBtn.style.flex = "1";
-        applyBtn.onclick = () => { this.applyParserOutput(parseDSL(textarea.value)); };
+        applyBtn.onclick = () => { this.applyParserOutput(parseDSL(textarea.value, { straightWires: this.straightWires })); };
 
         const closeBtn = document.createElement("button");
         closeBtn.textContent = "✕";
@@ -2596,8 +2617,7 @@ export class SvgGraphEditor {
         controls.appendChild(closeBtn);
         panel.appendChild(textarea);
         panel.appendChild(controls);
-        this.container.appendChild(panel);
-
+        this.contentArea.appendChild(panel);
         this.writingPanel = panel;
         this.writingTextarea = textarea;
         textarea.focus();
@@ -2605,6 +2625,11 @@ export class SvgGraphEditor {
 
     /** @deprecated use toggleWritingMode */
     public enableWritingMode() { this.toggleWritingMode(); }
+
+    public applyOpenDslText() {
+        if (!this.writingTextarea) return;
+        this.applyParserOutput(parseDSL(this.writingTextarea.value, { straightWires: this.straightWires }));
+    }
 
     
     public applyParserOutput(output: ParserOutput) {
@@ -2648,7 +2673,7 @@ export class SvgGraphEditor {
             gates: this.gates,
             wires: this.wires,
             groups: this.groups
-        } as any);
+        });
 
         this.writingTextarea.value = dsl;
     }

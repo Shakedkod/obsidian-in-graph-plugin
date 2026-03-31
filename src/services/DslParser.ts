@@ -786,7 +786,7 @@ function computeAutoLayout(parsed: ParserInner): Map<string, Position> {
     return positions;
 }
 
-export default function parseDSL(dsl: string): ParserOutput {
+export default function parseDSL(dsl: string, opts: { straightWires?: boolean } = {}): ParserOutput {
     const parsed = getParsedDsl(dsl);
     const positions = new Map<string, Position>();
 
@@ -845,14 +845,21 @@ export default function parseDSL(dsl: string): ParserOutput {
     // =========================
     // 4. NODES
     // =========================
-    const nodes: GraphNode[] = parsed.nodes.map(n => ({
-        id: n.id,
-        position: positions.get(n.id)!,
-        label: n.label ?? n.id,
-        isAccepting: n.isAccepting,
-        isStart: n.isStart,
-        color: n.color
-    }));
+    const nodes: GraphNode[] = parsed.nodes.map(n => {
+        const label = n.label ?? n.id;
+        // Estimate text width: ~7px per char at font-size 12, min radius 25
+        const estWidth = label.replace(/\$[^$]*\$/g, '').length * 7;
+        const radius = Math.max(25, Math.ceil(estWidth / 2) + 10);
+        return {
+            id: n.id,
+            position: positions.get(n.id)!,
+            label,
+            isAccepting: n.isAccepting,
+            isStart: n.isStart,
+            color: n.color,
+            radius
+        } as any;
+    });
 
     // =========================
     // 5. EDGES
@@ -864,7 +871,7 @@ export default function parseDSL(dsl: string): ParserOutput {
         label: e.label,
         color: e.color,
         type: "arrow",
-        isBendable: true,
+        isBendable: false,
         waypoints: (e as any).waypoints?.map((wp: any, i: number) => ({
             id: `wp-${e.id}-${i}`,
             x: wp.x,
@@ -930,7 +937,7 @@ export default function parseDSL(dsl: string): ParserOutput {
             fromPort: "out",
             toGate: w.to,
             toPort: `in${inputIndex}`,
-            isBendable: true
+            isBendable: false
         };
     });
 
@@ -941,25 +948,35 @@ export default function parseDSL(dsl: string): ParserOutput {
         wiresByFrom.get(wire.fromGate)!.push(wire);
     }
     for (const group of wiresByFrom.values()) {
-        if (group.length < 2) continue;
         group.forEach((wire, i) => {
             const fromGate = gates.find(g => g.id === wire.fromGate);
             const toGate = gates.find(g => g.id === wire.toGate);
             if (!fromGate || !toGate) return;
-            const mx = (fromGate.position.x + toGate.position.x) / 2;
-            const my = (fromGate.position.y + toGate.position.y) / 2;
-            const dx = toGate.position.x - fromGate.position.x;
-            const dy = toGate.position.y - fromGate.position.y;
-            const len = Math.sqrt(dx * dx + dy * dy) || 1;
-            const nx = -dy / len; const ny = dx / len;
-            const slot = i - (group.length - 1) / 2;
-            const WIRE_OFFSET = 20;
-            wire.waypoints = [{
-                id: `auto-wp-${wire.id}`,
-                x: mx + nx * WIRE_OFFSET * slot,
-                y: my + ny * WIRE_OFFSET * slot,
-                type: "bezier"
-            }];
+
+            if (opts.straightWires) {
+                // 90-degree L-shape: go horizontally from source, then vertically to target
+                const midX = toGate.position.x;
+                const midY = fromGate.position.y;
+                wire.waypoints = [
+                    { id: `auto-wp-${wire.id}-a`, x: midX, y: midY, type: "linear" as const }
+                ];
+            } else if (group.length >= 2) {
+                // Bezier fan-out offset so parallel wires don't stack
+                const mx = (fromGate.position.x + toGate.position.x) / 2;
+                const my = (fromGate.position.y + toGate.position.y) / 2;
+                const dx = toGate.position.x - fromGate.position.x;
+                const dy = toGate.position.y - fromGate.position.y;
+                const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                const nx = -dy / len; const ny = dx / len;
+                const slot = i - (group.length - 1) / 2;
+                const WIRE_OFFSET = 20;
+                wire.waypoints = [{
+                    id: `auto-wp-${wire.id}`,
+                    x: mx + nx * WIRE_OFFSET * slot,
+                    y: my + ny * WIRE_OFFSET * slot,
+                    type: "bezier" as const
+                }];
+            }
         });
     }
 

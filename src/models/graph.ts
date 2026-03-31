@@ -12,6 +12,7 @@ export interface GraphNode
     isAccepting?: boolean;
     isStart?: boolean;
     color?: string;
+    radius?: number;
 }
 
 export interface GraphWaypoint
