@@ -8,13 +8,13 @@ import { CircuitGate, CircuitWire } from "./models/circuits";
 import { InGraphSettingTab } from "./ui/settings";
 
 interface GraphRecord {
-    nodes: any[];
-    edges: any[];
-    gates: any[];
-    wires: any[];
-    groups: any[];
-    theme: any;
-    viewport: any;
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    gates: CircuitGate[];
+    wires: CircuitWire[];
+    groups: GraphGroup[];
+    theme: GraphTheme | undefined;
+    viewport: GraphViewport | undefined;
     lineStart: number;
     linePrefix: string;
     editor?: SvgGraphEditor;

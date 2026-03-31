@@ -7,7 +7,7 @@ enum LineType {
     NODE, GATE
 }
 
-type funcOutput = { data: ParserInner, type: LineType, vars: Record<string, any> };
+type funcOutput = { data: ParserInner, type: LineType, vars: Record<string, string> };
 
 function processGroupLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
     const startIndex = "group ".length;
@@ -147,7 +147,7 @@ function processAutomatonLine(line: string, data: ParserInner, groupFlag: string
 
     // Parse optional waypoints: `via x,yb; x,yl` inside style bracket
     let waypoints: ParserWaypoint[] | undefined;
-    const viaStr = (styles as any)._via as string | undefined;
+    const viaStr = (styles as { _via?: string })._via as string | undefined;
     if (viaStr) {
         waypoints = viaStr.split(";").map(s => s.trim()).filter(Boolean).map(pt => {
             const isLinear = pt.endsWith("l");
@@ -858,7 +858,7 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
             isStart: n.isStart,
             color: n.color,
             radius
-        } as any;
+        };
     });
 
     // =========================
