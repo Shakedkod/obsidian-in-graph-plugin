@@ -54,7 +54,7 @@ export default class InGraphPlugin extends Plugin {
                 const record = this.getClosestGraph();
                 if (!record?.editor) return;
 
-                record.editor.enableWritingMode();
+                record.editor.toggleWritingMode();
             },
             hotkeys: [
                 {
@@ -160,7 +160,9 @@ export default class InGraphPlugin extends Plugin {
                 groups, viewport,
                 resolvedTheme,
                 onSave,
-                () => this.batchSaveToFile()
+                () => this.batchSaveToFile(),
+                this.settings.dslMode ?? "bottom",
+                this.settings.clickBgOpensDsl ?? false
             );
             record.editor = editor;
 

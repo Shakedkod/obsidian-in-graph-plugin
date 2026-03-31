@@ -60,6 +60,15 @@ export class SvgGraphEditor {
     private draggedWaypoint: { edge: GraphEdge, wpId: string } | null = null;
     private dragOffset: Position = { x: 0, y: 0 };
 
+    // Multi-select
+    private selectedIds: Set<string> = new Set();
+    private toolbar: HTMLDivElement | null = null;
+
+    // Undo history
+    private history: { nodes: any[]; edges: any[]; gates: any[]; wires: any[]; groups: any[] }[] = [];
+    private readonly MAX_HISTORY = 50;
+    private undoBtn: HTMLButtonElement | null = null;
+
     // Linking state
     private isLinkingMode = false;
     private linkSourceNode: string | null = null;
@@ -71,6 +80,8 @@ export class SvgGraphEditor {
     // Writing Mode
     private writingPanel: HTMLDivElement | null = null;
     private writingTextarea: HTMLTextAreaElement | null = null;
+    private dslMode: "bottom" | "sidebar" = "bottom";
+    private clickBgOpensDsl = false;
 
     // Alignment guides
     private guideLayer: SVGGElement;
@@ -88,7 +99,9 @@ export class SvgGraphEditor {
         initialViewport: GraphViewport | undefined,
         userTheme: GraphTheme | undefined,
         onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void,
-        onManualSave: () => void
+        onManualSave: () => void,
+        dslMode: "bottom" | "sidebar" = "bottom",
+        clickBgOpensDsl = false
     ) {
         this.container = container;
         this.container.addClass("automaton-graph-container");
@@ -105,6 +118,8 @@ export class SvgGraphEditor {
         this.simulator.propagate();
         this.onSave = onSave;
         this.onManualSave = onManualSave;
+        this.dslMode = dslMode;
+        this.clickBgOpensDsl = clickBgOpensDsl;
         this.theme = { ...DEFAULT_THEME, ...userTheme };
 
         this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -133,6 +148,7 @@ export class SvgGraphEditor {
         this.buildDOM();
         this.buildUnsavedDot();
         this.buildContextMenu();
+        this.buildToolbar();
         this.buildResizer();
         this.initEvents();
         this.updatePositions();
@@ -184,6 +200,9 @@ export class SvgGraphEditor {
     }
 
     private triggerSave(forceFileWrite = false) {
+        // Snapshot current state before applying the change
+        this.pushHistory();
+
         const h = Math.max(100, this.container.clientHeight || parseInt(this.container.style.height) || 300);
         // Save the user's current view, but expanded to never clip content
         const savedViewBox = this.clampViewBoxToContent({ ...this.viewBox });
@@ -198,6 +217,8 @@ export class SvgGraphEditor {
         } else {
             this.unsavedDot.style.opacity = "1";
         }
+
+        this.onGraphChanged();
     }
 
     public forceSave(): void {
@@ -216,6 +237,222 @@ export class SvgGraphEditor {
         this.updateViewBox();
     }
 
+    // ─── HISTORY ────────────────────────────────────────────────────────────────
+
+    private pushHistory() {
+        this.history.push({
+            nodes:  JSON.parse(JSON.stringify(this.nodes)),
+            edges:  JSON.parse(JSON.stringify(this.edges)),
+            gates:  JSON.parse(JSON.stringify(this.gates)),
+            wires:  JSON.parse(JSON.stringify(this.wires)),
+            groups: JSON.parse(JSON.stringify(this.groups)),
+        });
+        if (this.history.length > this.MAX_HISTORY)
+            this.history.shift();
+        this.updateUndoButton();
+    }
+
+    public undo() {
+        if (this.history.length === 0) return;
+        const snap = this.history.pop()!;
+        this.nodes  = snap.nodes;
+        this.edges  = snap.edges;
+        this.gates  = snap.gates;
+        this.wires  = snap.wires;
+        this.groups = snap.groups;
+        this.simulator.rebuild(this.gates, this.wires);
+        this.simulator.propagate();
+        this.buildDOM();
+        this.updatePositions();
+        this.updateUndoButton();
+        this.onGraphChanged();
+        // Mark as unsaved without pushing another snapshot
+        this.unsavedDot.style.opacity = "1";
+    }
+
+    private updateUndoButton() {
+        if (!this.undoBtn) return;
+        const canUndo = this.history.length > 0;
+        this.undoBtn.disabled = !canUndo;
+        this.undoBtn.style.opacity = canUndo ? "1" : "0.35";
+        this.undoBtn.style.cursor  = canUndo ? "pointer" : "default";
+    }
+
+    // ─── TOOLBAR ────────────────────────────────────────────────────────────────
+
+    private buildToolbar() {
+        if (this.toolbar) this.toolbar.remove();
+
+        const bar = document.createElement("div");
+        bar.className = "automaton-toolbar";
+
+        const sep = () => {
+            const d = document.createElement("div");
+            d.style.cssText = "width:1px;height:16px;background:var(--background-modifier-border);margin:0 3px";
+            bar.appendChild(d);
+        };
+
+        const btn = (title: string, svg: string, onClick: () => void) => {
+            const b = document.createElement("button");
+            b.title = title;
+            b.innerHTML = svg;
+            b.className = "automaton-toolbar-btn";
+            b.onmouseenter = () => { b.style.background = "var(--background-modifier-hover)"; b.style.color = "var(--text-normal)"; };
+            b.onmouseleave = () => { b.style.background = "transparent"; b.style.color = "var(--text-muted)"; };
+            b.onclick = (e) => { e.stopPropagation(); onClick(); };
+            bar.appendChild(b);
+            return b;
+        };
+
+        const I = (d: string, vb = "0 0 16 16") => `<svg width="14" height="14" viewBox="${vb}" fill="currentColor" xmlns="http://www.w3.org/2000/svg">${d}</svg>`;
+
+        // ── Undo ──
+        this.undoBtn = btn("Undo (Ctrl+Z)", I('<path d="M4 4 C4 2 6 1 8 1 C11.3 1 14 3.7 14 7 C14 10.3 11.3 13 8 13 L8 11 C10.2 11 12 9.2 12 7 C12 4.8 10.2 3 8 3 C6.8 3 5.8 3.6 5.2 4.5 L7 4.5 L7 6 L2 6 L2 1 L3.5 1 L3.5 3 C4.2 2.1 5.5 1 8 1"/>'), () => this.undo());
+        this.updateUndoButton();
+        sep();
+        // ── Align ──
+        btn("Align left edges",         I('<rect x="1" y="2" width="2" height="12"/><rect x="3" y="4" width="8" height="3" rx="1"/><rect x="3" y="9" width="11" height="3" rx="1"/>'), () => this.alignSelection("left"));
+        btn("Align centers horizontally",I('<rect x="7" y="1" width="2" height="14"/><rect x="3" y="4" width="10" height="3" rx="1"/><rect x="4" y="9" width="8" height="3" rx="1"/>'), () => this.alignSelection("centerH"));
+        btn("Align right edges",         I('<rect x="13" y="2" width="2" height="12"/><rect x="5" y="4" width="8" height="3" rx="1"/><rect x="2" y="9" width="11" height="3" rx="1"/>'), () => this.alignSelection("right"));
+        sep();
+        btn("Align top edges",           I('<rect x="2" y="1" width="12" height="2"/><rect x="4" y="3" width="3" height="8" rx="1"/><rect x="9" y="3" width="3" height="11" rx="1"/>'), () => this.alignSelection("top"));
+        btn("Align middles vertically",  I('<rect x="1" y="7" width="14" height="2"/><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="4" width="3" height="8" rx="1"/>'), () => this.alignSelection("centerV"));
+        btn("Align bottom edges",        I('<rect x="2" y="13" width="12" height="2"/><rect x="4" y="5" width="3" height="8" rx="1"/><rect x="9" y="2" width="3" height="11" rx="1"/>'), () => this.alignSelection("bottom"));
+        sep();
+        // ── Distribute ──
+        btn("Distribute horizontally",   I('<rect x="1" y="2" width="2" height="12"/><rect x="13" y="2" width="2" height="12"/><rect x="5" y="5" width="6" height="6" rx="1"/>'), () => this.distributeSelection("horizontal"));
+        btn("Distribute vertically",     I('<rect x="2" y="1" width="12" height="2"/><rect x="2" y="13" width="12" height="2"/><rect x="5" y="5" width="6" height="6" rx="1"/>'), () => this.distributeSelection("vertical"));
+        sep();
+        // ── View ──
+        btn("Fit view to content",       I('<path d="M1 1h5v2H3v3H1V1zm9 0h5v5h-2V3h-3V1zM1 10h2v3h3v2H1v-5zm12 3h-3v2h5v-5h-2v3z"/>'), () => { this.fitViewToContent(); });
+        btn("Select all",                I('<rect x="2" y="2" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>'), () => this.selectAll());
+        sep();
+        // ── DSL editor toggle ──
+        btn("Toggle DSL editor (Ctrl+Shift+G)", I('<rect x="1" y="2" width="14" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="9" x2="8" y2="9" stroke="currentColor" stroke-width="1.3"/>'), () => this.toggleWritingMode());
+
+        // Insert toolbar before svgWrapper
+        this.container.insertBefore(bar, this.svgWrapper);
+        this.toolbar = bar;
+    }
+
+    private getSelectableItems(): { id: string; position: Position }[] {
+        return [
+            ...this.nodes.map(n => ({ id: n.id, position: n.position })),
+            ...this.gates.map(g => ({ id: g.id, position: g.position })),
+        ];
+    }
+
+    private selectAll() {
+        const all = this.getSelectableItems();
+        this.selectedIds = new Set(all.map(i => i.id));
+        this.refreshSelectionVisuals();
+    }
+
+    private clearSelection() {
+        this.selectedIds.clear();
+        this.refreshSelectionVisuals();
+    }
+
+    private toggleSelection(id: string, additive: boolean) {
+        if (additive) {
+            if (this.selectedIds.has(id)) this.selectedIds.delete(id);
+            else this.selectedIds.add(id);
+        } else {
+            const wasOnly = this.selectedIds.size === 1 && this.selectedIds.has(id);
+            this.selectedIds.clear();
+            if (!wasOnly) this.selectedIds.add(id);
+        }
+        this.refreshSelectionVisuals();
+    }
+
+    private refreshSelectionVisuals() {
+        for (const [id, el] of this.nodeElements) {
+            const circle = el.querySelector("circle");
+            if (circle) {
+                const node = this.nodes.find(n => n.id === id);
+                const baseStroke = node?.color || this.theme.nodeStroke || "var(--text-normal)";
+                if (this.selectedIds.has(id)) {
+                    circle.setAttribute("stroke", "var(--interactive-accent)");
+                    circle.setAttribute("stroke-width", "3");
+                } else {
+                    circle.setAttribute("stroke", node?.isAccepting ? (this.theme.acceptCircle || baseStroke) : baseStroke);
+                    circle.setAttribute("stroke-width", "2");
+                }
+            }
+        }
+        for (const [id, el] of this.gateElements) {
+            const body = el.querySelector("path");
+            if (body) {
+                if (this.selectedIds.has(id)) {
+                    body.setAttribute("filter", "drop-shadow(0 0 3px var(--interactive-accent))");
+                } else {
+                    body.removeAttribute("filter");
+                }
+            }
+        }
+    }
+
+    private alignSelection(axis: "left" | "centerH" | "right" | "top" | "centerV" | "bottom") {
+        const ids = this.selectedIds.size >= 2
+            ? this.selectedIds
+            : new Set(this.getSelectableItems().map(i => i.id));
+        if (ids.size < 2) return;
+
+        const items = this.getSelectableItems().filter(i => ids.has(i.id));
+        const xs = items.map(i => i.position.x);
+        const ys = items.map(i => i.position.y);
+        const minX = Math.min(...xs), maxX = Math.max(...xs);
+        const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+        for (const item of items) {
+            const node = this.nodes.find(n => n.id === item.id);
+            const gate = this.gates.find(g => g.id === item.id);
+            const target = node || gate;
+            if (!target) continue;
+            switch (axis) {
+                case "left":     target.position = { ...target.position, x: minX }; break;
+                case "centerH":  target.position = { ...target.position, x: (minX + maxX) / 2 }; break;
+                case "right":    target.position = { ...target.position, x: maxX }; break;
+                case "top":      target.position = { ...target.position, y: minY }; break;
+                case "centerV":  target.position = { ...target.position, y: (minY + maxY) / 2 }; break;
+                case "bottom":   target.position = { ...target.position, y: maxY }; break;
+            }
+        }
+        this.updatePositions();
+        this.triggerSave();
+    }
+
+    private distributeSelection(dir: "horizontal" | "vertical") {
+        const ids = this.selectedIds.size >= 3
+            ? this.selectedIds
+            : new Set(this.getSelectableItems().map(i => i.id));
+        if (ids.size < 3) return;
+
+        const items = this.getSelectableItems()
+            .filter(i => ids.has(i.id))
+            .sort((a, b) => dir === "horizontal"
+                ? a.position.x - b.position.x
+                : a.position.y - b.position.y);
+
+        const first = items[0].position;
+        const last = items[items.length - 1].position;
+        const totalSpan = dir === "horizontal" ? last.x - first.x : last.y - first.y;
+        const step = totalSpan / (items.length - 1);
+
+        items.forEach((item, i) => {
+            const node = this.nodes.find(n => n.id === item.id);
+            const gate = this.gates.find(g => g.id === item.id);
+            const target = node || gate;
+            if (!target) return;
+            if (dir === "horizontal") {
+                target.position = { ...target.position, x: Math.round(first.x + i * step) };
+            } else {
+                target.position = { ...target.position, y: Math.round(first.y + i * step) };
+            }
+        });
+        this.updatePositions();
+        this.triggerSave();
+    }
     // ─── RESIZER ────────────────────────────────────────────────────────────────
 
     private buildResizer() {
@@ -858,6 +1095,10 @@ export class SvgGraphEditor {
             if (e.key === "Escape") {
                 this.cancelLinking();
                 this.contextMenu.style.display = "none";
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+                e.preventDefault();
+                this.undo();
             }
         });
     }
@@ -1509,6 +1750,7 @@ export class SvgGraphEditor {
             if (nodeGroup?.dataset.nodeId) {
                 const node = this.nodes.find(n => n.id === nodeGroup.dataset.nodeId) || null;
                 if (node) {
+                    this.toggleSelection(node.id, evt.shiftKey);
                     this.cachedCTM = this.svg.getScreenCTM();
                     const mp = this.getMousePosition(evt);
                     this.dragOffset = { x: mp.x - node.position.x, y: mp.y - node.position.y };
@@ -1567,6 +1809,7 @@ export class SvgGraphEditor {
             if (gateGroup?.dataset.gateId && !portEl) {
                 const gate = this.gates.find(g => g.id === gateGroup.dataset.gateId) || null;
                 if (gate) {
+                    this.toggleSelection(gate.id, evt.shiftKey);
                     this.draggedGate = gate;
                     this.cachedCTM = this.svg.getScreenCTM();
                     const mp = this.getMousePosition(evt);
@@ -1579,6 +1822,12 @@ export class SvgGraphEditor {
             // Cancel wiring on background click
             if (this.wiringFrom && !portEl && !gateGroup) {
                 this.cancelWiring();
+            }
+
+            // Clear selection when clicking empty canvas
+            if (!nodeGroup && !gateGroup && !portEl && !wpHandle && !wireWpEl) {
+                if (!evt.shiftKey) this.clearSelection();
+                if (this.clickBgOpensDsl && !this.writingPanel) this.toggleWritingMode();
             }
         });
 
@@ -2268,22 +2517,47 @@ export class SvgGraphEditor {
         this.updatePositions();
     }
 
-    // --- WRITING MODE ───────────────────────────────────────────────────────────
-    public enableWritingMode(initialContent = "") {
-        if (this.writingPanel) return;
+    // --- WRITING MODE ────────────────────────────────────────────────────────────────────────────
+    public toggleWritingMode() {
+        if (this.writingPanel) {
+            this.writingPanel.remove();
+            this.writingPanel = null;
+            this.writingTextarea = null;
+            this.container.style.flexDirection = "";
+            return;
+        }
+
+        const currentDsl = serializeToDSL({
+            nodes: this.nodes,
+            edges: this.edges,
+            gates: this.gates,
+            wires: this.wires,
+            groups: this.groups
+        } as any);
+
+        const isSidebar = this.dslMode === "sidebar";
 
         const panel = document.createElement("div");
         panel.classList.add("automaton-writing-panel");
-
-        panel.style.height = "150px";
-        panel.style.borderTop = "1px solid var(--background-modifier-border)";
         panel.style.display = "flex";
         panel.style.flexDirection = "column";
         panel.style.background = "var(--background-secondary)";
 
+        if (isSidebar) {
+            panel.style.width = "220px";
+            panel.style.minWidth = "160px";
+            panel.style.borderLeft = "1px solid var(--background-modifier-border)";
+            panel.style.overflow = "auto";
+            this.container.style.display = "flex";
+            this.container.style.flexDirection = "row";
+        } else {
+            panel.style.height = "150px";
+            panel.style.borderTop = "1px solid var(--background-modifier-border)";
+        }
+
         // Textarea
         const textarea = document.createElement("textarea");
-        textarea.value = initialContent;
+        textarea.value = currentDsl;
         textarea.placeholder = "Type your graph DSL...";
         textarea.style.flex = "1";
         textarea.style.width = "100%";
@@ -2291,94 +2565,92 @@ export class SvgGraphEditor {
         textarea.style.border = "none";
         textarea.style.outline = "none";
         textarea.style.padding = "6px";
+        textarea.style.fontFamily = "var(--font-monospace)";
+        textarea.style.fontSize = "12px";
         textarea.style.background = "transparent";
         textarea.style.color = "var(--text-normal)";
 
-        // Buttons row
+        // Ctrl+Enter applies
+        textarea.addEventListener("keydown", (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                this.applyParserOutput(parseDSL(textarea.value));
+            }
+        });
+
+        // Controls
         const controls = document.createElement("div");
-        controls.style.display = "flex";
-        controls.style.justifyContent = "space-between";
-        controls.style.padding = "4px";
+        controls.style.cssText = "display:flex;justify-content:space-between;padding:4px;flex-shrink:0;gap:4px";
 
         const applyBtn = document.createElement("button");
         applyBtn.textContent = "Apply";
-        applyBtn.onclick = () => {
-            this.applyParserOutput(parseDSL(textarea.value));
-        };
+        applyBtn.style.flex = "1";
+        applyBtn.onclick = () => { this.applyParserOutput(parseDSL(textarea.value)); };
 
         const closeBtn = document.createElement("button");
-        closeBtn.textContent = "Close";
-        closeBtn.onclick = () => {
-            panel.remove();
-            this.writingPanel = null;
-            this.writingTextarea = null;
-        };
+        closeBtn.textContent = "✕";
+        closeBtn.title = "Close DSL editor";
+        closeBtn.onclick = () => { this.toggleWritingMode(); };
 
         controls.appendChild(applyBtn);
         controls.appendChild(closeBtn);
-
         panel.appendChild(textarea);
         panel.appendChild(controls);
-
         this.container.appendChild(panel);
 
         this.writingPanel = panel;
         this.writingTextarea = textarea;
-
         textarea.focus();
     }
 
+    /** @deprecated use toggleWritingMode */
+    public enableWritingMode() { this.toggleWritingMode(); }
+
+    
     public applyParserOutput(output: ParserOutput) {
-        if (output.nodes) this.nodes = output.nodes;
+        const layout = (output as any).layout as { rows: string[][], columns: string[][] } | undefined;
+        const explicitIds = new Set<string>([
+            ...(layout?.rows?.flat() ?? []),
+            ...(layout?.columns?.flat() ?? [])
+        ]);
+
+        if (output.nodes) {
+            this.nodes = output.nodes.map(n => {
+                if (explicitIds.has(n.id)) return n;
+                const existing = this.nodes.find(e => e.id === n.id);
+                return existing ? { ...n, position: existing.position } : n;
+            });
+        }
         if (output.edges) this.edges = output.edges;
-        if (output.gates) this.gates = output.gates;
+        if (output.gates) {
+            this.gates = output.gates.map(g => {
+                if (explicitIds.has(g.id)) return g;
+                const existing = this.gates.find(e => e.id === g.id);
+                return existing ? { ...g, position: existing.position } : g;
+            });
+        }
         if (output.wires) this.wires = output.wires;
         if (output.groups) this.groups = output.groups;
 
-        // Rebuild the DOM and update positions
+        this.simulator.rebuild(this.gates, this.wires);
+        this.simulator.propagate();
         this.buildDOM();
         this.updatePositions();
         this.triggerSave();
     }
 
     private onGraphChanged() {
+        if (!this.writingTextarea) return;
+
         const dsl = serializeToDSL({
             nodes: this.nodes,
             edges: this.edges,
             gates: this.gates,
             wires: this.wires,
             groups: this.groups
-        });
+        } as any);
 
         this.writingTextarea.value = dsl;
-    }
-
-    // --- ALIGNMENT GUIDES ────────────────────────────────────────────────────────────
-
-    private renderGuides(guides: { x?: number, y?: number }) {
-        this.guideLayer.innerHTML = "";
-
-        if (guides.x !== undefined) {
-            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            line.setAttribute("x1", guides.x.toString());
-            line.setAttribute("x2", guides.x.toString());
-            line.setAttribute("y1", "0");
-            line.setAttribute("y2", "1000");
-            line.setAttribute("stroke", "cyan");
-            line.setAttribute("stroke-dasharray", "4");
-            this.guideLayer.appendChild(line);
-        }
-
-        if (guides.y !== undefined) {
-            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            line.setAttribute("y1", guides.y.toString());
-            line.setAttribute("y2", guides.y.toString());
-            line.setAttribute("x1", "0");
-            line.setAttribute("x2", "1000");
-            line.setAttribute("stroke", "cyan");
-            line.setAttribute("stroke-dasharray", "4");
-            this.guideLayer.appendChild(line);
-        }
     }
 
     // ─── CLEANUP ────────────────────────────────────────────────────────────────

@@ -68,6 +68,35 @@
     { transform: scale(1); opacity: 0.5; }
 }
 
+.automaton-toolbar
+{
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 6px;
+    background-color: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    flex-wrap: wrap;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.automaton-toolbar-btn
+{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.1s;
+    color: var(--text-muted);
+}
+
 /* PDF Printing - Hide UI and Borders */
 @media print
 {
@@ -98,6 +127,11 @@
     {
         height: auto !important;
         overflow: visible !important;
+    }
+
+    .automaton-toolbar
+    {
+        display: none !important;
     }
 }
 

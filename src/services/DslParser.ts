@@ -1,6 +1,6 @@
 import { CircuitGate, CircuitWire, GateType } from "src/models/circuits";
 import { GraphEdge, GraphGroup, GraphNode, Position } from "src/models/graph";
-import { ParserNode, ParserGroup, ParserInner, ParserOutput, ParserEdge, ParserGate, NODE_SPACING_Y, START_Y, NODE_SPACING_X, START_X } from "src/models/parser";
+import { ParserNode, ParserGroup, ParserInner, ParserOutput, ParserEdge, ParserGate, NODE_SPACING_Y, START_Y, NODE_SPACING_X, START_X, ParserWaypoint } from "src/models/parser";
 
 enum LineType {
     CIRCUIT, AUTOMATON, GROUP, SETTINGS, UNKNOWN,
@@ -51,9 +51,17 @@ function isInData(nodeId: string, type: LineType, data: ParserInner): boolean {
     }
 }
 
-function processStyles(stylesStr: string): { color?: string, style?: string, active?: boolean } {
-    const styles = stylesStr.split(",").map(s => s.trim());
-    const result: { color?: string, style?: string, active?: boolean } = {};
+function processStyles(stylesStr: string): { color?: string, style?: string, active?: boolean, _via?: string } {
+    // Extract `via ...` before splitting on commas (coords contain commas)
+    let viaStr: string | undefined;
+    const viaIdx = stylesStr.indexOf("via ");
+    if (viaIdx !== -1) {
+        viaStr = stylesStr.slice(viaIdx + 4).trim();
+        stylesStr = stylesStr.slice(0, viaIdx);
+    }
+
+    const styles = stylesStr.split(",").map(s => s.trim()).filter(Boolean);
+    const result: { color?: string, style?: string, active?: boolean, _via?: string } = {};
     for (const style of styles) {
         if (style.startsWith("color=")) {
             result.color = style.split("=")[1];
@@ -65,6 +73,7 @@ function processStyles(stylesStr: string): { color?: string, style?: string, act
             result.active = style.split("=")[1].toLowerCase() === "true";
         }
     }
+    if (viaStr) result._via = viaStr;
 
     return result;
 }
@@ -136,6 +145,18 @@ function processAutomatonLine(line: string, data: ParserInner, groupFlag: string
     const sourceResult = addNode(sourceId, data, groupFlag);
     const targetResult = addNode(targetId, data, groupFlag);
 
+    // Parse optional waypoints: `via x,yb; x,yl` inside style bracket
+    let waypoints: ParserWaypoint[] | undefined;
+    const viaStr = (styles as any)._via as string | undefined;
+    if (viaStr) {
+        waypoints = viaStr.split(";").map(s => s.trim()).filter(Boolean).map(pt => {
+            const isLinear = pt.endsWith("l");
+            const clean = pt.replace(/[bl]$/, "");
+            const [x, y] = clean.split(",").map(Number);
+            return { x, y, type: isLinear ? "linear" as const : "bezier" as const };
+        });
+    }
+
     const edgeId = `edge-${crypto.randomUUID()}`;
     const edge: ParserEdge = {
         id: edgeId,
@@ -143,7 +164,8 @@ function processAutomatonLine(line: string, data: ParserInner, groupFlag: string
         to: targetId,
         label,
         color: styles.color,
-        style: styles.style
+        style: styles.style,
+        waypoints
     };
 
     data.edges.push(edge);
@@ -227,22 +249,13 @@ function processSettingsLine(line: string, data: ParserInner, groupFlag: string 
     const settingsPart = parts[1].trim();
 
     if (type === "row") {
-        const inRow = [];
-
-        for (const id of settingsPart.split(",").map(s => s.trim())) {
-            inRow.push(id);
-        }
-
+        const inRow = settingsPart.split(",").map(s => s.trim()).filter(Boolean);
         data.layout.rows.push(inRow);
         return { data, type: LineType.SETTINGS, vars: {} };
     }
-    else if (type === "column") {
-        const inColumn = [];
-
-        for (const id of settingsPart.split(",").map(s => s.trim())) {
-            inColumn.push(id);
-        }
-
+    // accept both "col" and "column"
+    else if (type === "col" || type === "column") {
+        const inColumn = settingsPart.split(",").map(s => s.trim()).filter(Boolean);
         data.layout.columns.push(inColumn);
         return { data, type: LineType.SETTINGS, vars: {} };
     }
@@ -307,7 +320,7 @@ function processLine(line: string, data: ParserInner, groupFlag: string | null):
         }
 
         if (type === LineType.UNKNOWN) {
-            if (/^(start|accept|row|column)\s*:/.test(line)) {
+            if (/^(start|accept|row|col)\s*:/.test(line)) {
                 type = LineType.SETTINGS;
             }
             else if (line.includes("->")) {
@@ -851,8 +864,45 @@ export default function parseDSL(dsl: string): ParserOutput {
         label: e.label,
         color: e.color,
         type: "arrow",
-        isBendable: true
+        isBendable: true,
+        waypoints: (e as any).waypoints?.map((wp: any, i: number) => ({
+            id: `wp-${e.id}-${i}`,
+            x: wp.x,
+            y: wp.y,
+            type: wp.type
+        }))
     }));
+
+    // Auto-route: bend parallel/bidirectional edges that share the same node pair
+    const edgePairGroups = new Map<string, typeof edges>();
+    for (const edge of edges) {
+        if (edge.waypoints?.length) continue; // user-placed, leave alone
+        const key = [edge.source, edge.target].sort().join("\u2194");
+        if (!edgePairGroups.has(key)) edgePairGroups.set(key, []);
+        edgePairGroups.get(key)!.push(edge);
+    }
+    for (const group of edgePairGroups.values()) {
+        if (group.length < 2) continue;
+        const srcNode = nodes.find(n => n.id === group[0].source);
+        const tgtNode = nodes.find(n => n.id === group[0].target);
+        if (!srcNode || !tgtNode) continue;
+        const mx = (srcNode.position.x + tgtNode.position.x) / 2;
+        const my = (srcNode.position.y + tgtNode.position.y) / 2;
+        const dx = tgtNode.position.x - srcNode.position.x;
+        const dy = tgtNode.position.y - srcNode.position.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = -dy / len; const ny = dx / len;
+        const OFFSET = 45;
+        group.forEach((edge, i) => {
+            const slot = i - (group.length - 1) / 2;
+            edge.waypoints = [{
+                id: `auto-wp-${edge.id}`,
+                x: mx + nx * OFFSET * slot,
+                y: my + ny * OFFSET * slot,
+                type: "bezier"
+            }];
+        });
+    }
 
     // =========================
     // 6. GATES
@@ -883,6 +933,35 @@ export default function parseDSL(dsl: string): ParserOutput {
             isBendable: true
         };
     });
+
+    // Auto-route fan-out wires from the same gate so they dont overlap
+    const wiresByFrom = new Map<string, typeof wires>();
+    for (const wire of wires) {
+        if (!wiresByFrom.has(wire.fromGate)) wiresByFrom.set(wire.fromGate, []);
+        wiresByFrom.get(wire.fromGate)!.push(wire);
+    }
+    for (const group of wiresByFrom.values()) {
+        if (group.length < 2) continue;
+        group.forEach((wire, i) => {
+            const fromGate = gates.find(g => g.id === wire.fromGate);
+            const toGate = gates.find(g => g.id === wire.toGate);
+            if (!fromGate || !toGate) return;
+            const mx = (fromGate.position.x + toGate.position.x) / 2;
+            const my = (fromGate.position.y + toGate.position.y) / 2;
+            const dx = toGate.position.x - fromGate.position.x;
+            const dy = toGate.position.y - fromGate.position.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const nx = -dy / len; const ny = dx / len;
+            const slot = i - (group.length - 1) / 2;
+            const WIRE_OFFSET = 20;
+            wire.waypoints = [{
+                id: `auto-wp-${wire.id}`,
+                x: mx + nx * WIRE_OFFSET * slot,
+                y: my + ny * WIRE_OFFSET * slot,
+                type: "bezier"
+            }];
+        });
+    }
 
     // =========================
     // 8. GROUP BOUNDING BOX
@@ -946,8 +1025,9 @@ export default function parseDSL(dsl: string): ParserOutput {
         edges,
         gates,
         wires,
-        groups
-    };
+        groups,
+        layout: parsed.layout
+    } as any;
 }
 
 export function serializeToDSL(output: ParserOutput): string {
@@ -965,28 +1045,56 @@ export function serializeToDSL(output: ParserOutput): string {
     if (acceptNodes.length)
         lines.push(`accept: ${acceptNodes.join(", ")}`);
 
+    // Emit row/col layout directives so they survive Apply round-trips
+    for (const row of (output as any).layout?.rows ?? []) {
+        lines.push(`row: ${row.join(", ")}`);
+    }
+    for (const col of (output as any).layout?.columns ?? []) {
+        lines.push(`col: ${col.join(", ")}`);
+    }
+
     // =========================
     // 2. EDGES (automaton)
     // =========================
     for (const e of output.edges ?? []) {
         let line = `${e.source} -> ${e.target}`;
-        if (e.label) line += ` : ${e.label}`;
+        const hasLabel = !!e.label;
+        const hasWaypoints = !!e.waypoints?.length;
+        if (hasLabel || hasWaypoints) {
+            line += ` : ${e.label ?? ""}`;
+            if (hasWaypoints) {
+                const viaStr = e.waypoints!
+                    .map(wp => `${Math.round(wp.x)},${Math.round(wp.y)}${wp.type === "linear" ? "l" : "b"}`)
+                    .join("; ");
+                line += ` [via ${viaStr}]`;
+            }
+        }
         lines.push(line);
     }
 
     // =========================
-    // 3. GATES
+    // 3. GATES + WIRES (function-call form)
     // =========================
+    const wiresByTarget = new Map<string, any[]>();
+    for (const w of output.wires ?? []) {
+        if (!wiresByTarget.has(w.toGate)) wiresByTarget.set(w.toGate, []);
+        wiresByTarget.get(w.toGate)!.push(w);
+    }
+    for (const [, wires] of wiresByTarget) {
+        wires.sort((a, b) => (a.toPort ?? "").localeCompare(b.toPort ?? ""));
+    }
+
     for (const g of output.gates ?? []) {
-        if (g.type === "INPUT" || g.type === "OUTPUT") {
+        const inWires = wiresByTarget.get(g.id) ?? [];
+        const inputs = inWires.map(w => w.fromGate);
+        if (g.type === "INPUT") {
+            lines.push(`${g.id} = INPUT`);
+        } else if (inputs.length > 0) {
+            lines.push(`${g.id} = ${g.type}(${inputs.join(", ")})`);
+        } else {
             lines.push(`${g.id} = ${g.type}`);
         }
     }
-
-    // =========================
-    // 4. WIRES → convert back to function form (basic)
-    // =========================
-    // (optional advanced later)
 
     return lines.join("\n");
 }

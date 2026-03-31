@@ -38,6 +38,13 @@ export interface ParserGroup
     groups: ParserGroup[];
 }
 
+export interface ParserWaypoint
+{
+    x: number;
+    y: number; 
+    type: "bezier" | "linear";
+}
+
 export interface ParserWire
 {
     id: string;
@@ -47,6 +54,7 @@ export interface ParserWire
     style?: string;
     color?: string;
     active: boolean;
+    waypoints?: ParserWaypoint[];
 }
 
 export interface ParserEdge
@@ -57,6 +65,7 @@ export interface ParserEdge
     label?: string;
     style?: string;
     color?: string;
+    waypoints?: ParserWaypoint[];
 }
 
 export interface ParserInner
