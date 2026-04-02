@@ -12,8 +12,8 @@ export class SvgGraphEditor {
     container: HTMLElement;
     svg: SVGSVGElement;
 
-    private contextMenu: HTMLDivElement;
-    private unsavedDot: HTMLDivElement;
+    private contextMenu!: HTMLDivElement;
+    private unsavedDot!: HTMLDivElement;
     private svgWrapper: HTMLDivElement;
     private contentArea: HTMLDivElement;
 

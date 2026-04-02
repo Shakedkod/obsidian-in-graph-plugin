@@ -1,13 +1,13 @@
 import { CircuitGate, CircuitWire, GateType } from "src/models/circuits";
 import { GraphEdge, GraphGroup, GraphNode, Position } from "src/models/graph";
-import { ParserNode, ParserGroup, ParserInner, ParserOutput, ParserEdge, ParserGate, NODE_SPACING_Y, START_Y, NODE_SPACING_X, START_X, ParserWaypoint } from "src/models/parser";
+import { ParserNode, ParserGroup, ParserInner, ParserOutput, ParserEdge, ParserGate, NODE_SPACING_Y, START_Y, NODE_SPACING_X, START_X } from "src/models/parser";
 
 enum LineType {
     CIRCUIT, AUTOMATON, GROUP, SETTINGS, UNKNOWN,
-    NODE, GATE
+    NODE, GATE, NODE_ATTR
 }
 
-type funcOutput = { data: ParserInner, type: LineType, vars: Record<string, string> };
+type funcOutput = { data: ParserInner, type: LineType, vars: Record<string, any> };
 
 function processGroupLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
     const startIndex = "group ".length;
@@ -51,7 +51,7 @@ function isInData(nodeId: string, type: LineType, data: ParserInner): boolean {
     }
 }
 
-function processStyles(stylesStr: string): { color?: string, style?: string, active?: boolean, _via?: string } {
+function processStyles(stylesStr: string): { color?: string, style?: string, active?: boolean, _via?: string, label?: string, start?: boolean, accept?: boolean } {
     // Extract `via ...` before splitting on commas (coords contain commas)
     let viaStr: string | undefined;
     const viaIdx = stylesStr.indexOf("via ");
@@ -61,7 +61,7 @@ function processStyles(stylesStr: string): { color?: string, style?: string, act
     }
 
     const styles = stylesStr.split(",").map(s => s.trim()).filter(Boolean);
-    const result: { color?: string, style?: string, active?: boolean, _via?: string } = {};
+    const result: { color?: string, style?: string, active?: boolean, _via?: string, label?: string, start?: boolean, accept?: boolean } = {};
     for (const style of styles) {
         if (style.startsWith("color=")) {
             result.color = style.split("=")[1];
@@ -71,6 +71,16 @@ function processStyles(stylesStr: string): { color?: string, style?: string, act
         }
         else if (style.startsWith("active=")) {
             result.active = style.split("=")[1].toLowerCase() === "true";
+        }
+        else if (style.startsWith("label=")) {
+            // strip surrounding quotes if present
+            result.label = style.slice(6).trim().replace(/^["']|["']$/g, "");
+        }
+        else if (style === "start") {
+            result.start = true;
+        }
+        else if (style === "accept") {
+            result.accept = true;
         }
     }
     if (viaStr) result._via = viaStr;
@@ -110,6 +120,42 @@ function addNode(id: string, data: ParserInner, groupFlag: string | null): funcO
     return { data, type: LineType.NODE, vars: {} };
 }
 
+// Handles: id [label="...", color=..., start, accept]
+function processNodeAttrLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
+    const bracketStart = line.indexOf("[");
+    const bracketEnd = line.lastIndexOf("]");
+    if (bracketStart === -1 || bracketEnd === -1) return { data, type: LineType.UNKNOWN, vars: {} };
+
+    const id = line.slice(0, bracketStart).trim();
+    if (!id) return { data, type: LineType.UNKNOWN, vars: {} };
+
+    const attrStr = line.slice(bracketStart + 1, bracketEnd);
+    const styles = processStyles(attrStr);
+
+    // Create node if it doesn't exist yet
+    if (!isInData(id, LineType.NODE, data)) {
+        addNode(id, data, groupFlag);
+    }
+
+    // Apply attributes to the node
+    const node = data.nodes.find(n => n.id === id);
+    if (node) {
+        if (styles.label !== undefined) node.label = styles.label;
+        if (styles.color !== undefined) node.color = styles.color;
+        if (styles.start) node.isStart = true;
+        if (styles.accept) node.isAccepting = true;
+    }
+
+    // Also check if it's a gate and apply label there
+    const gate = data.gates.find(g => g.id === id);
+    if (gate) {
+        if (styles.label !== undefined) gate.label = styles.label;
+        if (styles.color !== undefined) gate.color = styles.color;
+    }
+
+    return { data, type: LineType.NODE_ATTR, vars: {} };
+}
+
 function processAutomatonLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
     const parts = line.split("->").map(p => p.trim());
     if (parts.length !== 2) {
@@ -146,8 +192,8 @@ function processAutomatonLine(line: string, data: ParserInner, groupFlag: string
     const targetResult = addNode(targetId, data, groupFlag);
 
     // Parse optional waypoints: `via x,yb; x,yl` inside style bracket
-    let waypoints: ParserWaypoint[] | undefined;
-    const viaStr = (styles as { _via?: string })._via as string | undefined;
+    let waypoints: { x: number; y: number; type: "bezier" | "linear" }[] | undefined;
+    const viaStr = (styles as any)._via as string | undefined;
     if (viaStr) {
         waypoints = viaStr.split(";").map(s => s.trim()).filter(Boolean).map(pt => {
             const isLinear = pt.endsWith("l");
@@ -180,12 +226,13 @@ function processGateLine(line: string, data: ParserInner, groupFlag: string | nu
 
     const gateId = parts[0];
     const hasStyling = parts[1].includes(" [");
-    let color = undefined, active = false;
+    let color = undefined, active = false, gateLabel: string | undefined;
     if (hasStyling) {
         const stylePart = parts[1].slice(parts[1].indexOf(" [") + 2, parts[1].lastIndexOf("]")).trim();
         const styles = processStyles(stylePart);
         color = styles.color;
-        active = styles.active;
+        active = styles.active ?? false;
+        gateLabel = styles.label;
     }
 
     const match = parts[1].match(/^(\w+)\s*\((.*)\)/);
@@ -204,7 +251,8 @@ function processGateLine(line: string, data: ParserInner, groupFlag: string | nu
         id: gateId,
         type: type,
         color: color,
-        active: active
+        active: active,
+        label: gateLabel
     };
 
     if (!isInData(gate.id, LineType.GATE, data)) {
@@ -309,7 +357,11 @@ function processLine(line: string, data: ParserInner, groupFlag: string | null):
         type = LineType.GROUP;
     }
     else {
+        let inBracket = 0;
         for (const char of line) {
+            if (char === "[") { inBracket++; continue; }
+            if (char === "]") { inBracket--; continue; }
+            if (inBracket > 0) continue; // skip = inside [...]
             switch (char) {
                 case "=":
                     type = LineType.GATE;
@@ -326,6 +378,10 @@ function processLine(line: string, data: ParserInner, groupFlag: string | null):
             else if (line.includes("->")) {
                 type = LineType.AUTOMATON;
             }
+            // id [attrs] — node/gate attribute line
+            else if (/^\w[\w.]*\s*\[/.test(line)) {
+                type = LineType.NODE_ATTR;
+            }
         }
     }
 
@@ -338,6 +394,8 @@ function processLine(line: string, data: ParserInner, groupFlag: string | null):
             return processGroupLine(line, data, groupFlag);
         case LineType.SETTINGS:
             return processSettingsLine(line, data, groupFlag);
+        case LineType.NODE_ATTR:
+            return processNodeAttrLine(line, data, groupFlag);
     }
 
     return { data, type: LineType.UNKNOWN, vars: { line: line } };
@@ -415,6 +473,7 @@ function computeDFALayout(parsed: ParserInner): Map<string, Position> {
         const l = level.get(curr)!;
 
         for (const next of adj.get(curr) ?? []) {
+            if (next === curr) continue; // skip self-loops
             if (!level.has(next)) {
                 level.set(next, l + 1);
                 queue.push(next);
@@ -552,10 +611,9 @@ function computeCircuitLayout(parsed: ParserInner): Map<string, Position> {
         const currLevel = level.get(curr)!;
 
         for (const next of adj.get(curr) ?? []) {
-            const nextLevel = currLevel + 1;
-
-            if (!level.has(next) || level.get(next)! < nextLevel) {
-                level.set(next, nextLevel);
+            if (next === curr) continue; // skip self-loops
+            if (!level.has(next)) {       // only visit each node once
+                level.set(next, currLevel + 1);
                 queue.push(next);
             }
         }
@@ -697,10 +755,9 @@ function computeAutoLayout(parsed: ParserInner): Map<string, Position> {
         const currLevel = level.get(curr)!;
 
         for (const next of adj.get(curr) ?? []) {
-            const nextLevel = currLevel + 1;
-
-            if (!level.has(next) || level.get(next)! < nextLevel) {
-                level.set(next, nextLevel);
+            if (next === curr) continue; // skip self-loops
+            if (!level.has(next)) {       // only visit each node once
+                level.set(next, currLevel + 1);
                 queue.push(next);
             }
         }
@@ -858,7 +915,7 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
             isStart: n.isStart,
             color: n.color,
             radius
-        };
+        } as any;
     });
 
     // =========================
@@ -1070,6 +1127,13 @@ export function serializeToDSL(output: ParserOutput): string {
         lines.push(`col: ${col.join(", ")}`);
     }
 
+    // Node attribute lines (only for nodes whose label differs from id)
+    for (const n of output.nodes ?? []) {
+        const attrs: string[] = [];
+        if (n.label && n.label !== n.id) attrs.push(`label="${n.label}"`);
+        if (attrs.length) lines.push(`${n.id} [${attrs.join(", ")}]`);
+    }
+
     // =========================
     // 2. EDGES (automaton)
     // =========================
@@ -1104,12 +1168,13 @@ export function serializeToDSL(output: ParserOutput): string {
     for (const g of output.gates ?? []) {
         const inWires = wiresByTarget.get(g.id) ?? [];
         const inputs = inWires.map(w => w.fromGate);
+        const labelAttr = g.label ? ` [label="${g.label}"]` : "";
         if (g.type === "INPUT") {
-            lines.push(`${g.id} = INPUT`);
+            lines.push(`${g.id} = INPUT${labelAttr}`);
         } else if (inputs.length > 0) {
-            lines.push(`${g.id} = ${g.type}(${inputs.join(", ")})`);
+            lines.push(`${g.id} = ${g.type}(${inputs.join(", ")})${labelAttr}`);
         } else {
-            lines.push(`${g.id} = ${g.type}`);
+            lines.push(`${g.id} = ${g.type}${labelAttr}`);
         }
     }
 

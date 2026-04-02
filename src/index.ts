@@ -21,10 +21,10 @@ interface GraphRecord {
 }
 
 export default class InGraphPlugin extends Plugin {
-    settings: InGraphPluginSettings;
+    settings!: InGraphPluginSettings;
 
     private activeGraphs = new Map<string, GraphRecord>();
-    private saveTimeout: NodeJS.Timeout | null = null;
+    private saveTimeout: ReturnType<typeof setTimeout> | null = null;
     private lastMousePos = { x: 0, y: 0 };
 
     async onload(): Promise<void> {
