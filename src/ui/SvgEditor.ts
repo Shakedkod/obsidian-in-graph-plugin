@@ -5,6 +5,7 @@ import { CircuitGate, CircuitWire, GATE_SIZE, GateType } from "../models/circuit
 import { CircuitSimulator, getPortPositions } from "../services/circuitSimulator";
 import { ParserOutput } from "src/models/parser";
 import parseDSL, { serializeToDSL } from "src/services/DslParser";
+import DslAutocomplete from "./AutoComplete";
 
 export class SvgGraphEditor {
     static persistedMode = "none";
@@ -81,6 +82,7 @@ export class SvgGraphEditor {
     // Writing Mode
     private writingPanel: HTMLDivElement | null = null;
     private writingTextarea: HTMLTextAreaElement | null = null;
+    private autocomplete: DslAutocomplete | null = null;
     private dslMode: "bottom" | "sidebar" = "bottom";
     private clickBgOpensDsl = false;
     private straightWires = false;
@@ -1596,6 +1598,7 @@ export class SvgGraphEditor {
                     this.container.appendChild(input);
                     input.focus();
                     input.select();
+                    this.autocomplete = new DslAutocomplete(input);
                     let saved = false;
                     const save = () => {
                         if (saved) return;
@@ -1610,6 +1613,7 @@ export class SvgGraphEditor {
                         if (e.key === "Enter") save();
                         if (e.key === "Escape") {
                             saved = true;
+                            this.autocomplete?.destroy();
                             input.remove();
                         }
                     });
@@ -1638,6 +1642,8 @@ export class SvgGraphEditor {
             this.container.appendChild(input);
             input.focus();
             input.select();
+            this.autocomplete = new DslAutocomplete(input);
+            this.autocomplete = new DslAutocomplete(input);
 
             let saved = false;
             const save = () => {
@@ -1650,6 +1656,7 @@ export class SvgGraphEditor {
                     const e = this.edges.find(e => e.id === edgeGroup.dataset.edgeId);
                     if (e) e.label = input.value;
                 }
+                this.autocomplete?.destroy();
                 if (input.parentNode) input.remove();
                 this.buildDOM();
                 this.updatePositions();
@@ -1661,6 +1668,7 @@ export class SvgGraphEditor {
                 if (e.key === "Enter") save();
                 if (e.key === "Escape") {
                     saved = true;
+                    this.autocomplete?.destroy();
                     input.remove();
                 }
             });
@@ -2542,6 +2550,8 @@ export class SvgGraphEditor {
             this.writingPanel.remove();
             this.writingPanel = null;
             this.writingTextarea = null;
+            this.autocomplete?.destroy();
+            this.autocomplete = null;
             this.contentArea.style.flexDirection = "column";
             return;
         }
@@ -2620,6 +2630,7 @@ export class SvgGraphEditor {
         this.contentArea.appendChild(panel);
         this.writingPanel = panel;
         this.writingTextarea = textarea;
+        this.autocomplete = new DslAutocomplete(textarea);
         textarea.focus();
     }
 

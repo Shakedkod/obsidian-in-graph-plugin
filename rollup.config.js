@@ -19,9 +19,12 @@ export default {
       browser: true,
     }),
     replace({
+      preventAssignment: true,
       "process.env.NODE_ENV": JSON.stringify(env.NODE_ENV),
     }),
     babel({
+      babelHelpers: "bundled",
+      extensions: [".ts", ".tsx", ".js", ".jsx"],
       presets: ["@babel/preset-react", "@babel/preset-typescript"],
     }),
     commonjs(),
