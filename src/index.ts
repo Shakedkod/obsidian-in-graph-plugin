@@ -6,6 +6,7 @@ import { InGraphPluginSettings } from "./models/settings";
 import { DEFAULT_SETTINGS } from "./models/settings";
 import { CircuitGate, CircuitWire } from "./models/circuits";
 import { InGraphSettingTab } from "./ui/settings";
+import { initSnippets } from "./services/LatexSnippets";
 
 interface GraphRecord {
     nodes: GraphNode[];
@@ -309,6 +310,37 @@ export default class InGraphPlugin extends Plugin {
             if (!record.editor) continue;
             const newTheme = this.getResolvedTheme(record.theme);
             record.editor.applyTheme(newTheme);
+        }
+    }
+
+    async loadCustomSnippets() {
+        const path = this.settings.snippetsPath;
+        if (!path) {
+            initSnippets(); // Load defaults
+            return;
+        }
+
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+            try {
+                const content = await this.app.vault.read(file);
+                // Evaluate the JS content to allow regex literals and arrow functions
+                const parsed = new Function(`return ${content};`)();
+                
+                if (Array.isArray(parsed)) {
+                    initSnippets(parsed);
+                    console.log(`Loaded ${parsed.length} custom snippets from ${path}`);
+                } else {
+                    console.error("Snippets file must evaluate to an array.");
+                    initSnippets();
+                }
+            } catch (e) {
+                console.error("Failed to load custom snippets", e);
+                initSnippets();
+            }
+        } else {
+            console.error(`Snippets file not found: ${path}`);
+            initSnippets();
         }
     }
 }

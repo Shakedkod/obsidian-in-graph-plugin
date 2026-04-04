@@ -270,21 +270,33 @@ export const LATEX_SNIPPETS: AutoSnippet[] = [
     }, options: "mA", description: "N x N identity matrix"}
 ];
 
-// ─── INITIALIZE REGEX INJECTIONS ───
-LATEX_SNIPPETS.forEach(snippet => {
-    if (typeof snippet.trigger === "string" && snippet.options.includes("r")) {
-        snippet.trigger = new RegExp(
-            snippet.trigger
-                .replace(/\$\{GREEK\}/g, GREEK)
-                .replace(/\$\{SYMBOL\}/g, SYMBOL)
-        );
-    } else if (snippet.trigger instanceof RegExp) {
-        snippet.trigger = new RegExp(
-            snippet.trigger.source
-                .replace(/\$\{GREEK\}/g, GREEK)
-                .replace(/\$\{SYMBOL\}/g, SYMBOL)
-        );
-    }
-});
+export function initSnippets(customSnippets?: any[]) {
+    const source = customSnippets && customSnippets.length > 0 ? customSnippets : LATEX_SNIPPETS;
 
-LATEX_SNIPPETS.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    // Clear the array (this keeps the reference intact for AutoComplete.ts)
+    LATEX_SNIPPETS.length = 0;
+
+    source.forEach((snippet: { trigger: any; options: string; replacement: any; priority: any; description: any; }) => {
+        let trig = snippet.trigger;
+        // Inject GREEK and SYMBOL variables
+        if (typeof trig === "string" && snippet.options.includes("r")) {
+            trig = new RegExp(trig.replace(/\$\{GREEK\}/g, GREEK).replace(/\$\{SYMBOL\}/g, SYMBOL));
+        } else if (trig instanceof RegExp) {
+            trig = new RegExp(trig.source.replace(/\$\{GREEK\}/g, GREEK).replace(/\$\{SYMBOL\}/g, SYMBOL));
+        }
+
+        LATEX_SNIPPETS.push({
+            trigger: trig,
+            replacement: snippet.replacement,
+            options: snippet.options,
+            priority: snippet.priority,
+            description: snippet.description
+        });
+    });
+
+    // Sort higher priority snippets to trigger first
+    LATEX_SNIPPETS.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+// Initialize with defaults right away
+initSnippets();

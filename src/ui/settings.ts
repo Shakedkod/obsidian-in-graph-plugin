@@ -67,18 +67,18 @@ export class InGraphSettingTab extends PluginSettingTab {
         this.customColorRows = [];
 
         const colorFields: { key: keyof GraphTheme; label: string; desc: string }[] = [
-            { key: "background",   label: "Background",    desc: "Canvas background color" },
-            { key: "nodeFill",     label: "Node fill",     desc: "Inside of state circles" },
-            { key: "nodeStroke",   label: "Node border",   desc: "Outline of state circles" },
-            { key: "text",         label: "Text",          desc: "Labels on nodes and edges" },
-            { key: "edgeStroke",   label: "Edge color",    desc: "Transition arrows and lines" },
-            { key: "startArrow",   label: "Start arrow",   desc: "Arrow indicating start state" },
-            { key: "acceptCircle", label: "Accept ring",   desc: "Inner ring of accepting states" },
-            { key: "gateStroke",   label: "Gate border",   desc: "Outline of logic gates" },
-            { key: "gateFill",     label: "Gate fill",     desc: "Inside of logic gates" },
-            { key: "wireActive",   label: "Active wire",   desc: "Color of live circuit wires" },
-            { key: "groupFill",    label: "Group fill",    desc: "Background of group frames" },
-            { key: "groupStroke",  label: "Group border",  desc: "Outline of group frames" },
+            { key: "background", label: "Background", desc: "Canvas background color" },
+            { key: "nodeFill", label: "Node fill", desc: "Inside of state circles" },
+            { key: "nodeStroke", label: "Node border", desc: "Outline of state circles" },
+            { key: "text", label: "Text", desc: "Labels on nodes and edges" },
+            { key: "edgeStroke", label: "Edge color", desc: "Transition arrows and lines" },
+            { key: "startArrow", label: "Start arrow", desc: "Arrow indicating start state" },
+            { key: "acceptCircle", label: "Accept ring", desc: "Inner ring of accepting states" },
+            { key: "gateStroke", label: "Gate border", desc: "Outline of logic gates" },
+            { key: "gateFill", label: "Gate fill", desc: "Inside of logic gates" },
+            { key: "wireActive", label: "Active wire", desc: "Color of live circuit wires" },
+            { key: "groupFill", label: "Group fill", desc: "Background of group frames" },
+            { key: "groupStroke", label: "Group border", desc: "Outline of group frames" },
         ];
 
         colorFields.forEach(({ key, label, desc }) => {
@@ -107,7 +107,7 @@ export class InGraphSettingTab extends PluginSettingTab {
             .setName("Panel position")
             .setDesc("Where the DSL text editor appears when opened.")
             .addDropdown(drop => {
-                drop.addOption("bottom",  "Bottom bar");
+                drop.addOption("bottom", "Bottom bar");
                 drop.addOption("sidebar", "Side panel (right)");
                 drop.setValue(this.plugin.settings.dslMode ?? "bottom");
                 drop.onChange(async (val: string) => {
@@ -137,6 +137,29 @@ export class InGraphSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 });
             });
+
+        new Setting(dslSection)
+            .setName("Custom snippets")
+            .setDesc("Enable loading of user-defined DSL snippets from a file in your vault.")
+            .addToggle(tog => {
+                tog.setValue(this.plugin.settings.customSnippetsEnabled ?? false);
+                tog.onChange(async (val) => {
+                    this.plugin.settings.customSnippetsEnabled = val;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        new Setting(dslSection)
+            .setName("Custom Snippets File")
+            .setDesc("Path to your snippets file in the vault (e.g., 'snippets.txt'). Leave empty to use defaults.")
+            .addText(text => text
+                .setPlaceholder("snippets.txt")
+                .setValue(this.plugin.settings.snippetsPath)
+                .onChange(async (value) => {
+                    this.plugin.settings.snippetsPath = value;
+                    await this.plugin.saveSettings();
+                    await this.plugin.loadCustomSnippets(); // Reload instantly!
+                }));
 
         // ─── SECTION: Behaviour ──────────────────────────────────────────────────
 
@@ -178,16 +201,16 @@ export class InGraphSettingTab extends PluginSettingTab {
         });
 
         const shortcuts: { keys: string; action: string }[] = [
-            { keys: "Ctrl+Shift+G",          action: "Toggle DSL editor (nearest graph)" },
-            { keys: "Ctrl+Shift+Enter",      action: "Apply DSL text (nearest graph)" },
-            { keys: "Ctrl+S",                action: "Save graph to file" },
-            { keys: "Ctrl+Z",                action: "Undo last change" },
-            { keys: "Double-click node",     action: "Edit label inline" },
+            { keys: "Ctrl+Shift+G", action: "Toggle DSL editor (nearest graph)" },
+            { keys: "Ctrl+Shift+Enter", action: "Apply DSL text (nearest graph)" },
+            { keys: "Ctrl+S", action: "Save graph to file" },
+            { keys: "Ctrl+Z", action: "Undo last change" },
+            { keys: "Double-click node", action: "Edit label inline" },
             { keys: "Double-click waypoint", action: "Clear all waypoints on edge" },
-            { keys: "Right-click",           action: "Context menu" },
-            { keys: "Scroll",                action: "Zoom in / out" },
+            { keys: "Right-click", action: "Context menu" },
+            { keys: "Scroll", action: "Zoom in / out" },
             { keys: "Alt+drag / Middle-click", action: "Pan canvas" },
-            { keys: "Shift+click",           action: "Add node/gate to selection" },
+            { keys: "Shift+click", action: "Add node/gate to selection" },
         ];
 
         const table = shortcutsSection.createEl("table", { cls: "automaton-shortcuts-table" });
@@ -214,13 +237,13 @@ export class InGraphSettingTab extends PluginSettingTab {
             theme = THEME_PRESETS.find(p => p.name === themeName)?.theme ?? {};
         }
 
-        const bg     = theme.background   || "var(--background-primary)";
-        const fill   = theme.nodeFill     || "var(--background-secondary)";
-        const stroke = theme.nodeStroke   || "var(--text-normal)";
-        const txt    = theme.text         || "var(--text-normal)";
-        const edge   = theme.edgeStroke   || "var(--text-muted)";
+        const bg = theme.background || "var(--background-primary)";
+        const fill = theme.nodeFill || "var(--background-secondary)";
+        const stroke = theme.nodeStroke || "var(--text-normal)";
+        const txt = theme.text || "var(--text-normal)";
+        const edge = theme.edgeStroke || "var(--text-muted)";
         const accept = theme.acceptCircle || stroke;
-        const start  = theme.startArrow   || stroke;
+        const start = theme.startArrow || stroke;
 
         container.style.setProperty("--automaton-preview-bg", bg);
 

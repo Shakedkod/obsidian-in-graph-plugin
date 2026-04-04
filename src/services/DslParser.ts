@@ -219,32 +219,43 @@ function processAutomatonLine(line: string, data: ParserInner, groupFlag: string
 }
 
 function processGateLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
-    const parts = line.split("=").map(p => p.trim());
-    if (parts.length !== 2) {
+    // 1. Split ONLY on the first '=' to avoid breaking on label="hi"
+    const eqIdx = line.indexOf("=");
+    if (eqIdx === -1) {
         return { data, type: LineType.UNKNOWN, vars: {} };
     }
 
-    const gateId = parts[0];
-    const hasStyling = parts[1].includes(" [");
+    const gateId = line.slice(0, eqIdx).trim();
+    let rightSide = line.slice(eqIdx + 1).trim();
+
+    // 2. Extract styling
+    const hasStyling = rightSide.includes(" [");
     let color = undefined, active = false, gateLabel: string | undefined;
+    
     if (hasStyling) {
-        const stylePart = parts[1].slice(parts[1].indexOf(" [") + 2, parts[1].lastIndexOf("]")).trim();
+        const styleStart = rightSide.indexOf(" [");
+        const stylePart = rightSide.slice(styleStart + 2, rightSide.lastIndexOf("]")).trim();
         const styles = processStyles(stylePart);
+        
         color = styles.color;
         active = styles.active ?? false;
         gateLabel = styles.label;
+        
+        // Strip the styling block out so we can parse the gate type cleanly
+        rightSide = rightSide.slice(0, styleStart).trim();
     }
 
-    const match = parts[1].match(/^(\w+)\s*\((.*)\)/);
+    // 3. Parse Gate Type and Inputs
+    const match = rightSide.match(/^(\w+)\s*\((.*)\)/);
 
     let type: GateType;
     let inputs: string[] = [];
 
     if (match) {
         type = match[1].toUpperCase() as GateType;
-        inputs = match[2].split(",").map(s => s.trim());
+        inputs = match[2].split(",").map(s => s.trim()).filter(Boolean);
     } else {
-        type = parts[1].trim().toUpperCase() as GateType;
+        type = rightSide.trim().toUpperCase() as GateType;
     }
 
     const gate: ParserGate = {
@@ -1010,15 +1021,8 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
             const toGate = gates.find(g => g.id === wire.toGate);
             if (!fromGate || !toGate) return;
 
-            if (opts.straightWires) {
-                // 90-degree L-shape: go horizontally from source, then vertically to target
-                const midX = toGate.position.x;
-                const midY = fromGate.position.y;
-                wire.waypoints = [
-                    { id: `auto-wp-${wire.id}-a`, x: midX, y: midY, type: "linear" as const }
-                ];
-            } else if (group.length >= 2) {
-                // Bezier fan-out offset so parallel wires don't stack
+            // FIX: Only apply the Bezier fan-out if straightWires is OFF
+            if (!opts.straightWires && group.length >= 2) {
                 const mx = (fromGate.position.x + toGate.position.x) / 2;
                 const my = (fromGate.position.y + toGate.position.y) / 2;
                 const dx = toGate.position.x - fromGate.position.x;
@@ -1168,13 +1172,30 @@ export function serializeToDSL(output: ParserOutput): string {
     for (const g of output.gates ?? []) {
         const inWires = wiresByTarget.get(g.id) ?? [];
         const inputs = inWires.map(w => w.fromGate);
-        const labelAttr = g.label ? ` [label="${g.label}"]` : "";
+        
+        // 1. Build the attributes array dynamically
+        const attrs: string[] = [];
+        if (g.label) attrs.push(`label="${g.label}"`);
+        
+        // 2. Check for the 'active' or 'value' state on INPUT gates
         if (g.type === "INPUT") {
-            lines.push(`${g.id} = INPUT${labelAttr}`);
+            // SvgEditor uses 'value', Parser uses 'active', so we check both
+            const isActive = (g as any).value ?? (g as any).active;
+            if (isActive) {
+                attrs.push(`active=true`);
+            }
+        }
+
+        // 3. Format the attributes string
+        const attrStr = attrs.length > 0 ? ` [${attrs.join(", ")}]` : "";
+
+        // 4. Output the correct line
+        if (g.type === "INPUT") {
+            lines.push(`${g.id} = INPUT${attrStr}`);
         } else if (inputs.length > 0) {
-            lines.push(`${g.id} = ${g.type}(${inputs.join(", ")})${labelAttr}`);
+            lines.push(`${g.id} = ${g.type}(${inputs.join(", ")})${attrStr}`);
         } else {
-            lines.push(`${g.id} = ${g.type}${labelAttr}`);
+            lines.push(`${g.id} = ${g.type}${attrStr}`);
         }
     }
 

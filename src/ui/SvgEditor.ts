@@ -2285,9 +2285,14 @@ export class SvgGraphEditor {
                 let p = `M ${x1} ${y1}`;
                 if (wps.length === 1) {
                     const cp = wps[0];
-                    const cx = 2 * cp.x - 0.5 * x1 - 0.5 * x2;
-                    const cy = 2 * cp.y - 0.5 * y1 - 0.5 * y2;
-                    p += ` Q ${cx} ${cy} ${x2} ${y2}`;
+                    // FIX: Respect the "linear" flag instead of forcing a curve
+                    if (cp.type === "linear") {
+                        p += ` L ${cp.x} ${cp.y} L ${x2} ${y2}`;
+                    } else {
+                        const cx = 2 * cp.x - 0.5 * x1 - 0.5 * x2;
+                        const cy = 2 * cp.y - 0.5 * y1 - 0.5 * y2;
+                        p += ` Q ${cx} ${cy} ${x2} ${y2}`;
+                    }
                 } else {
                     wps.forEach((wp, i) => {
                         if (wp.type === "linear") {
@@ -2303,7 +2308,14 @@ export class SvgGraphEditor {
                 }
                 wirePath = p;
             } else {
-                wirePath = `M ${x1} ${y1} C ${x1 + 40} ${y1}, ${x2 - 40} ${y2}, ${x2} ${y2}`;
+                // DEFAULT ROUTING (No waypoints)
+                if (this.straightWires) {
+                    // FIX: Dynamic Manhattan (90-degree) routing
+                    const midX = (x1 + x2) / 2;
+                    wirePath = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+                } else {
+                    wirePath = `M ${x1} ${y1} C ${x1 + 40} ${y1}, ${x2 - 40} ${y2}, ${x2} ${y2}`;
+                }
             }
 
             // Sync hitbox (element before the visible path)

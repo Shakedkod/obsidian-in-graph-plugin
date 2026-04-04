@@ -8,6 +8,8 @@ export interface InGraphPluginSettings {
     maxHistory: number;
     defaultHeight: number;
     straightWires?: boolean;
+    customSnippetsEnabled: boolean;
+    snippetsPath: string;
 }
 
 export const DEFAULT_SETTINGS: InGraphPluginSettings = {
@@ -25,5 +27,7 @@ export const DEFAULT_SETTINGS: InGraphPluginSettings = {
     clickBgOpensDsl: true,
     straightWires: true,
     maxHistory: 50,
-    defaultHeight: 300
+    defaultHeight: 300,
+    customSnippetsEnabled: false,
+    snippetsPath: "",
 };
