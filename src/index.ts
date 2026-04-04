@@ -9,6 +9,7 @@ import { InGraphSettingTab } from "./ui/settings";
 import { initSnippets } from "./services/LatexSnippets";
 
 interface GraphRecord {
+    graphId: string;
     nodes: GraphNode[];
     edges: GraphEdge[];
     gates: CircuitGate[];
@@ -76,6 +77,7 @@ export default class InGraphPlugin extends Plugin {
             const sectionInfo = ctx.getSectionInfo(el);
             const blockId = sectionInfo?.lineStart.toString() || Math.random().toString();
 
+            let id = "";
             let nodes = [];
             let edges = [];
             let theme = undefined;
@@ -87,6 +89,7 @@ export default class InGraphPlugin extends Plugin {
 
             try {
                 const data = JSON.parse(source);
+                id = data.id || blockId;
                 nodes = data.nodes || [];
                 edges = data.edges || [];
                 gates = data.gates || [];
@@ -149,12 +152,13 @@ export default class InGraphPlugin extends Plugin {
 
             const resolvedTheme = this.getResolvedTheme(theme);
 
-            const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix };
+            const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix, graphId: id || blockId };
             this.activeGraphs.set(blockId, record);
 
-            const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], _savedTheme?: GraphTheme,
+            const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], id: string, _savedTheme?: GraphTheme,
                 savedViewport?: GraphViewport, savedGates?: CircuitGate[], savedWires?: CircuitWire[],
                 savedGroups?: GraphGroup[]) => {
+                record.graphId = id;
                 record.nodes = savedNodes;
                 record.edges = savedEdges;
                 record.gates = savedGates ?? record.gates;
@@ -239,9 +243,18 @@ export default class InGraphPlugin extends Plugin {
                     .filter(r => r.lineStart >= 0)
                     .sort((a, b) => a.lineStart - b.lineStart);
 
-                let lineOffset = 0; // accumulate shifts from earlier splices
+                let lineOffset = 0; 
+                
+                // ADDED: A Set to remember which graph IDs we have already saved!
+                const processedIds = new Set<string>();
 
                 for (const record of records) {
+                    // THE FIX: If we already saved this exact graph (e.g. from a split pane), skip it!
+                    if (processedIds.has(record.graphId)) {
+                        continue;
+                    }
+                    processedIds.add(record.graphId); // Mark as processed
+
                     const absOpen = record.lineStart + lineOffset;
                     const p = record.linePrefix;
 
@@ -271,6 +284,7 @@ export default class InGraphPlugin extends Plugin {
                     }
 
                     const newJson = JSON.stringify({
+                        id: record.graphId,
                         nodes: record.nodes,
                         edges: record.edges,
                         gates: record.gates?.length ? record.gates : undefined,
@@ -292,7 +306,10 @@ export default class InGraphPlugin extends Plugin {
                 return lines.join("\n");
             });
 
-            console.log(`Saved ${this.activeGraphs.size} graphs.`);
+            // Deduplicate the console log count to show the true number of unique saves
+            const uniqueGraphCount = new Set([...this.activeGraphs.values()].map(r => r.graphId)).size;
+            console.log(`Saved ${uniqueGraphCount} graphs.`);
+            
         }, 50);
     }
 

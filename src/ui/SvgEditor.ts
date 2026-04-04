@@ -27,6 +27,7 @@ export class SvgGraphEditor {
     private hasMovedEnough = false;
     private cachedCTM: DOMMatrix | null = null;
 
+    graphId = `graph-${Math.random().toString(36).substr(2, 9)}`;
     nodes: GraphNode[];
     edges: GraphEdge[];
     groups: GraphGroup[] = [];
@@ -91,7 +92,7 @@ export class SvgGraphEditor {
     // Tracks DOM observers to prevent memory leaks
     private resizeObservers: ResizeObserver[] = [];
 
-    private onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void;
+    private onSave: (nodes: GraphNode[], edges: GraphEdge[], id: string, theme?: GraphTheme, viewport?: GraphViewport, gates?: CircuitGate[], wires?: CircuitWire[], groups?: GraphGroup[]) => void;
     private onManualSave: () => void;
 
     constructor(
@@ -103,7 +104,7 @@ export class SvgGraphEditor {
         initialGroups: GraphGroup[] = [],
         initialViewport: GraphViewport | undefined,
         userTheme: GraphTheme | undefined,
-        onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void,
+        onSave: (nodes: GraphNode[], edges: GraphEdge[], id: string, theme?: GraphTheme, viewport?: GraphViewport, gates?: CircuitGate[], wires?: CircuitWire[], groups?: GraphGroup[]) => void,
         onManualSave: () => void,
         dslMode: "bottom" | "sidebar" = "bottom",
         clickBgOpensDsl = false,
@@ -227,10 +228,16 @@ export class SvgGraphEditor {
         const currentViewport: GraphViewport = { height: h, viewBox: savedViewBox };
 
         if (forceFileWrite) {
-            (this.onSave as (n: GraphNode[], e: GraphEdge[], t?: GraphTheme, v?: GraphViewport, g?: CircuitGate[],
-                w?: CircuitWire[], grp?: GraphGroup[]) => void)(
-                    this.nodes, this.edges, this.theme, currentViewport, this.gates, this.wires, this.groups
-                );
+            this.onSave(
+                this.nodes,
+                this.edges,
+                this.graphId,
+                this.theme,
+                currentViewport,
+                this.gates,
+                this.wires,
+                this.groups
+            );
             this.unsavedDot.style.opacity = "0";
         } else {
             this.unsavedDot.style.opacity = "1";
