@@ -77,7 +77,7 @@ export default class InGraphPlugin extends Plugin {
             const sectionInfo = ctx.getSectionInfo(el);
             const blockId = sectionInfo?.lineStart.toString() || Math.random().toString();
 
-            let id = "";
+            let id = `graph-${Math.random().toString(36).substr(2, 9)}`;
             let nodes = [];
             let edges = [];
             let theme = undefined;
@@ -89,7 +89,7 @@ export default class InGraphPlugin extends Plugin {
 
             try {
                 const data = JSON.parse(source);
-                id = data.id || blockId;
+                id = data.id || id;
                 nodes = data.nodes || [];
                 edges = data.edges || [];
                 gates = data.gates || [];
@@ -152,7 +152,7 @@ export default class InGraphPlugin extends Plugin {
 
             const resolvedTheme = this.getResolvedTheme(theme);
 
-            const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix, graphId: id || blockId };
+            const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix, graphId: id };
             this.activeGraphs.set(blockId, record);
 
             const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], id: string, _savedTheme?: GraphTheme,
@@ -249,7 +249,12 @@ export default class InGraphPlugin extends Plugin {
                 const processedIds = new Set<string>();
 
                 for (const record of records) {
-                    // THE FIX: If we already saved this exact graph (e.g. from a split pane), skip it!
+                    if (!record.graphId)
+                    {
+                        // create a new ID if missing (shouldn't normally happen, but just in case)
+                        record.graphId = `graph-${Math.random().toString(36).substr(2, 9)}`;
+                    }
+
                     if (processedIds.has(record.graphId)) {
                         continue;
                     }
