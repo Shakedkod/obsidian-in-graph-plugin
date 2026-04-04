@@ -9,6 +9,7 @@ export interface CircuitGate
     position: Position;
     label?: string;
     value?: boolean;
+    color?: string;
 }
 
 export interface CircuitWireWaypoint

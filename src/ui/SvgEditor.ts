@@ -47,6 +47,7 @@ export class SvgGraphEditor {
     private groupElements: Map<string, SVGGElement> = new Map();
     private draggedGroup: GraphGroup | null = null;
     private draggedGroupResize: GraphGroup | null = null;
+    private draggedGroupChildren: { nodes: GraphNode[], gates: CircuitGate[] } | null = null;
     private resizeStartSize: { w: number; h: number } | null = null;
     private resizeStartMouse: Position | null = null;
 
@@ -86,6 +87,9 @@ export class SvgGraphEditor {
     private dslMode: "bottom" | "sidebar" = "bottom";
     private clickBgOpensDsl = false;
     private straightWires = false;
+
+    // Tracks DOM observers to prevent memory leaks
+    private resizeObservers: ResizeObserver[] = [];
 
     private onSave: (nodes: GraphNode[], edges: GraphEdge[], theme?: GraphTheme, viewport?: GraphViewport) => void;
     private onManualSave: () => void;
@@ -813,6 +817,10 @@ export class SvgGraphEditor {
 
         this.groupElements.clear();
 
+        // Clear old observers before rebuilding
+        this.resizeObservers.forEach(ro => ro.disconnect());
+        this.resizeObservers = [];
+
         // Draw groups first (behind everything)
         this.groups.forEach(group => {
             const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -820,36 +828,35 @@ export class SvgGraphEditor {
 
             // Main frame rect — drag target
             const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-            rect.setAttribute("rx", "8");
-            rect.setAttribute("fill", group.color ? group.color + "18" : (this.theme.groupFill || "rgba(120,120,180,0.06)"));
-            rect.setAttribute("stroke", group.color || this.theme.groupStroke || "var(--text-muted)");
-            rect.setAttribute("stroke-width", "1.5");
-            rect.setAttribute("stroke-dasharray", "6 4");
+            rect.setAttribute("rx", "6");
+            rect.setAttribute("fill", group.color ? group.color + "10" : "var(--background-secondary)");
+            // Solid stroke to look like a frame instead of dashed
+            rect.setAttribute("stroke", group.color || "var(--background-modifier-border)");
+            rect.setAttribute("stroke-width", "2");
             rect.style.cursor = "move";
             rect.dataset.groupDragId = group.id;
             g.appendChild(rect);
 
-            // Label pill background
+            // Label pill background (floating above the frame!)
             const labelBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
             labelBg.setAttribute("rx", "4");
-            labelBg.setAttribute("height", "20");
-            labelBg.setAttribute("fill", group.color || this.theme.groupStroke || "var(--text-muted)");
-            labelBg.setAttribute("opacity", "0.18");
-            labelBg.setAttribute("pointer-events", "none");
+            labelBg.setAttribute("height", "22");
+            labelBg.setAttribute("fill", group.color || "var(--background-modifier-border)");
+            labelBg.style.pointerEvents = "none";
             g.appendChild(labelBg);
 
             // Label text
             const labelEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            labelEl.setAttribute("font-size", "11");
+            labelEl.setAttribute("font-size", "12");
             labelEl.setAttribute("font-weight", "600");
             labelEl.setAttribute("font-family", "var(--font-sans, sans-serif)");
-            labelEl.setAttribute("fill", group.color || this.theme.text || "var(--text-normal)");
+            labelEl.setAttribute("fill", "var(--text-normal)");
             labelEl.setAttribute("dominant-baseline", "central");
             labelEl.setAttribute("pointer-events", "none");
-            labelEl.textContent = group.label || "Group";
+            labelEl.textContent = group.label || "Frame";
             g.appendChild(labelEl);
 
-            // Resize grip — 3 diagonal lines at bottom-right
+            // Resize grip
             const grip = document.createElementNS("http://www.w3.org/2000/svg", "g");
             grip.dataset.groupResizeId = group.id;
             grip.style.cursor = "nwse-resize";
@@ -952,9 +959,6 @@ export class SvgGraphEditor {
             group.style.cursor = "pointer";
             group.dataset.nodeId = node.id;
             const r = node.radius ?? 25;
-            const innerR = Math.max(r - 5, r * 0.8);
-            const arrowTip = -r;
-            const arrowBase = -(r + 20);
 
             const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
             circle.setAttribute("cx", "0");
@@ -965,17 +969,21 @@ export class SvgGraphEditor {
             circle.setAttribute("stroke-width", "2");
             group.appendChild(circle);
 
+            let inner: SVGCircleElement | null = null;
             if (node.isAccepting) {
-                const inner = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-                inner.setAttribute("r", String(Math.round(innerR)));
+                inner = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                inner.setAttribute("r", String(Math.max(r - 5, r * 0.8)));
                 inner.setAttribute("fill", "none");
                 inner.setAttribute("stroke", this.theme.acceptCircle || nodeColor);
                 inner.setAttribute("stroke-width", "2");
                 group.appendChild(inner);
             }
 
+            let startArrow: SVGPathElement | null = null;
             if (node.isStart) {
-                const startArrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                const arrowTip = -r;
+                const arrowBase = -(r + 20);
+                startArrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
                 startArrow.setAttribute("d", `M ${arrowBase} 0 L ${arrowTip} 0 M ${arrowTip - 5} -5 L ${arrowTip} 0 L ${arrowTip - 5} 5`);
                 startArrow.setAttribute("fill", "none");
                 startArrow.setAttribute("stroke", this.theme.startArrow || nodeColor);
@@ -989,8 +997,44 @@ export class SvgGraphEditor {
             foreignObjNode.setAttribute("width", "1");
             foreignObjNode.setAttribute("height", "1");
             foreignObjNode.style.overflow = "visible";
-            foreignObjNode.appendChild(this.createLabelContent(node.label, this.theme.text!));
+            
+            const labelContent = this.createLabelContent(node.label, this.theme.text!);
+            foreignObjNode.appendChild(labelContent);
             group.appendChild(foreignObjNode);
+
+            // --- AUTO-SIZING MAGIC ---
+            const pill = labelContent.querySelector('.automaton-label-pill');
+            if (pill) {
+                const ro = new ResizeObserver((entries) => {
+                    for (const entry of entries) {
+                        const { width, height } = entry.contentRect;
+                        
+                        // Use Pythagorean theorem to find the diagonal distance, plus some comfortable padding
+                        const newR = Math.max(25, Math.ceil(Math.sqrt((width / 2) ** 2 + (height / 2) ** 2)) + 6);
+                        
+                        if (node.radius !== newR) {
+                            node.radius = newR;
+                            circle.setAttribute("r", String(newR));
+                            
+                            if (inner) {
+                                inner.setAttribute("r", String(newR - 5));
+                            }
+                            
+                            if (startArrow) {
+                                const tip = -newR;
+                                const base = -(newR + 20);
+                                startArrow.setAttribute("d", `M ${base} 0 L ${tip} 0 M ${tip - 5} -5 L ${tip} 0 L ${tip - 5} 5`);
+                            }
+                            
+                            // Instantly update incoming/outgoing edges so they connect perfectly to the new boundary!
+                            this.updatePositions();
+                        }
+                    }
+                });
+                ro.observe(pill);
+                this.resizeObservers.push(ro);
+            }
+            // --------------------------
 
             // Hover → show link button
             group.addEventListener("mouseenter", () => {
@@ -999,7 +1043,6 @@ export class SvgGraphEditor {
                 this.showLinkButton(node);
             });
             group.addEventListener("mouseleave", (e) => {
-                // Don't hide if the mouse moved to the link button itself
                 const related = e.relatedTarget as Element;
                 if (this.linkButton?.contains(related)) return;
                 this.hoveredNodeId = null;
@@ -1036,15 +1079,15 @@ export class SvgGraphEditor {
                 rect.setAttribute("height", group.h.toString());
             }
 
-            const textWidth = Math.max(60, (group.label || "Group").length * 7 + 16);
+            const textWidth = Math.max(60, (group.label || "Frame").length * 8 + 16);
             if (labelBg) {
-                labelBg.setAttribute("x", (group.x + 10).toString());
-                labelBg.setAttribute("y", (group.y - 10).toString());
+                labelBg.setAttribute("x", group.x.toString());
+                labelBg.setAttribute("y", (group.y - 24).toString()); // Position above the frame
                 labelBg.setAttribute("width", textWidth.toString());
             }
             if (labelEl) {
-                labelEl.setAttribute("x", (group.x + 18).toString());
-                labelEl.setAttribute("y", (group.y).toString());
+                labelEl.setAttribute("x", (group.x + 8).toString());
+                labelEl.setAttribute("y", (group.y - 13).toString());
             }
 
             // Resize grip: 3 diagonal lines at bottom-right corner
@@ -1231,6 +1274,7 @@ export class SvgGraphEditor {
             const edgeGroup = target.closest("g[data-edge-id]") as SVGGElement;
             const wpHandle = target.closest("circle[data-wp-id]") as SVGCircleElement;
             const gateGroupCtx = target.closest("g[data-gate-id]") as SVGGElement;
+            const frameGroupCtx = target.closest("g[data-group-id]") as SVGGElement;
 
             // NODE SECTION
             if (nodeGroup?.dataset.nodeId) {
@@ -1491,6 +1535,26 @@ export class SvgGraphEditor {
                         this.triggerSave();
                     }, "danger");
                 } else {
+                    // FRAME SECTION
+                    if (frameGroupCtx?.dataset.groupId) {
+                        const grp = this.groups.find(g => g.id === frameGroupCtx.dataset.groupId);
+                        if (grp) {
+                            this.addColorPicker("Frame color", grp.color, (c) => {
+                                grp.color = c;
+                                this.buildDOM();
+                                this.updatePositions();
+                                this.triggerSave();
+                            });
+                            this.addMenuItem("Delete frame", () => {
+                                this.groups = this.groups.filter(g => g.id !== grp.id);
+                                this.buildDOM();
+                                this.updatePositions();
+                                this.triggerSave();
+                            }, "danger");
+                            this.addDivider();
+                        }
+                    }
+
                     // CANVAS SECTION
                     this.addMenuItem("Add state here", () => {
                         const mp = this.getMousePosition(evt);
@@ -1500,6 +1564,7 @@ export class SvgGraphEditor {
                         this.updatePositions();
                         this.triggerSave();
                     });
+
                     this.addDivider();
                     this.addSubMenu("Add gate", (sub) => {
                         const gateTypes: GateType[] = ["INPUT", "OUTPUT", "AND", "OR", "NOT", "NAND", "NOR", "XOR", "XNOR"];
@@ -1722,6 +1787,19 @@ export class SvgGraphEditor {
                     const mp = this.getMousePosition(evt);
                     this.dragOffset = { x: mp.x - grp.x, y: mp.y - grp.y };
                     this.draggedGroup = grp;
+                    
+                    // FIX: Only "scoop up" the children if Shift is NOT pressed!
+                    if (!evt.shiftKey) {
+                        const isInside = (p: Position) => p.x >= grp.x && p.x <= grp.x + grp.w && p.y >= grp.y && p.y <= grp.y + grp.h;
+                        this.draggedGroupChildren = {
+                            nodes: this.nodes.filter(n => isInside(n.position)),
+                            gates: this.gates.filter(g => isInside(g.position))
+                        };
+                    } else {
+                        // Shift is held: Leave children behind
+                        this.draggedGroupChildren = null;
+                    }
+
                     this.dragStartPos = { x: evt.clientX, y: evt.clientY };
                     this.hasMovedEnough = false;
                     return;
@@ -1896,12 +1974,39 @@ export class SvgGraphEditor {
 
             // Group drag
             if (this.draggedGroup) {
-                this.draggedGroup.x = Math.round((mp.x - this.dragOffset.x) * 10) / 10;
-                this.draggedGroup.y = Math.round((mp.y - this.dragOffset.y) * 10) / 10;
-                this.updateGroupPositions();
+                const mp = this.getMousePosition(evt);
+                const newX = Math.round((mp.x - this.dragOffset.x) * 10) / 10;
+                const newY = Math.round((mp.y - this.dragOffset.y) * 10) / 10;
+                const dx = newX - this.draggedGroup.x;
+                const dy = newY - this.draggedGroup.y;
+
+                this.draggedGroup.x = newX;
+                this.draggedGroup.y = newY;
+
+                // Move all collected children
+                if (this.draggedGroupChildren) {
+                    this.draggedGroupChildren.nodes.forEach(n => { n.position.x += dx; n.position.y += dy; });
+                    this.draggedGroupChildren.gates.forEach(g => { g.position.x += dx; g.position.y += dy; });
+                    
+                    // Also move waypoints of edges/wires that are completely contained within the frame
+                    this.edges.forEach(e => {
+                        if (e.waypoints && this.draggedGroupChildren!.nodes.some(n => n.id === e.source) && this.draggedGroupChildren!.nodes.some(n => n.id === e.target)) {
+                            e.waypoints.forEach(wp => { wp.x += dx; wp.y += dy; });
+                        }
+                    });
+                    this.wires.forEach(w => {
+                        if (w.waypoints && this.draggedGroupChildren!.gates.some(g => g.id === w.fromGate) && this.draggedGroupChildren!.gates.some(g => g.id === w.toGate)) {
+                            w.waypoints.forEach(wp => { wp.x += dx; wp.y += dy; });
+                        }
+                    });
+                }
+
+                this.updatePositions();
+                this.updateGatePositions();
                 return;
             }
 
+            // Waypoint dragging
             if (this.draggedWaypoint) {
                 const { edge, wpId } = this.draggedWaypoint;
                 const wp = edge.waypoints?.find(w => w.id === (wpId ?? ""));
@@ -1913,6 +2018,7 @@ export class SvgGraphEditor {
                 return;
             }
 
+            // Node dragging
             if (this.draggedNode) {
                 const newX = Math.round((mp.x - this.dragOffset.x) * 10) / 10;
                 const newY = Math.round((mp.y - this.dragOffset.y) * 10) / 10;
@@ -1990,6 +2096,7 @@ export class SvgGraphEditor {
             }
             if (this.draggedGroup) {
                 this.draggedGroup = null;
+                this.draggedGroupChildren = null;
                 this.triggerSave(false);
             }
             if (this.draggedGroupResize) {
@@ -2138,12 +2245,21 @@ export class SvgGraphEditor {
             g.dataset.gateId = gate.id;
             g.style.cursor = "grab";
 
-            // Gate body shape
+            // Gate body shape (Solid filled portion)
             const bodyPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
             bodyPath.setAttribute("stroke-width", "2");
             bodyPath.setAttribute("stroke-linecap", "round");
             bodyPath.setAttribute("stroke-linejoin", "round");
+            bodyPath.classList.add("automaton-gate-body");
             g.appendChild(bodyPath);
+
+            // Gate separated lines (Never filled, used for XOR back lines)
+            const linePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            linePath.setAttribute("stroke-width", "2");
+            linePath.setAttribute("stroke-linecap", "round");
+            linePath.setAttribute("fill", "none");
+            linePath.classList.add("automaton-gate-lines");
+            g.appendChild(linePath);
 
             // Type label (centered on gate body)
             const typeLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -2193,31 +2309,50 @@ export class SvgGraphEditor {
     }
 
     private updateGatePositions() {
-        const stroke = this.theme.gateStroke || this.theme.nodeStroke || "var(--text-normal)";
-        const fill = this.theme.gateFill || this.theme.nodeFill || "var(--background-secondary)";
-        const txt = this.theme.text || "var(--text-normal)";
-        const activeWireColor = this.theme.wireActive || "#facc15";
+        const standardStroke = this.theme.gateStroke || this.theme.nodeStroke || "var(--text-normal)";
+        const standardFill = this.theme.gateFill || this.theme.nodeFill || "var(--background-primary-alt)";
+        const standardText = this.theme.text || "var(--text-normal)";
+        const activeColor = this.theme.wireActive || "var(--interactive-accent)";
+        const activeText = "var(--text-on-accent, var(--background-primary))";
 
         this.gates.forEach(gate => {
             const g = this.gateElements.get(gate.id);
             if (!g) return;
             g.setAttribute("transform", `translate(${gate.position.x}, ${gate.position.y})`);
 
-            const active = this.simulator.getGateValue(gate.id);
-            const gateFill = gate.type === "INPUT"
-                ? (active ? "#22c55e" : fill)
-                : gate.type === "OUTPUT"
-                    ? (active ? "#22c55e" : fill)
-                    : fill;
+            const outputActive = this.simulator.getGateValue(gate.id);
+            const isIO = gate.type === "INPUT" || gate.type === "OUTPUT";
+            
+            let gateFill = standardFill;
+            let gateStroke = standardStroke;
+            let labelFill = standardText;
 
-            const bodyPath = g.querySelector("path") as SVGPathElement;
-            if (bodyPath) {
-                bodyPath.setAttribute("d", this.getGateShape(gate.type));
-                bodyPath.setAttribute("fill", gateFill);
-                bodyPath.setAttribute("stroke", stroke);
+            if (isIO && outputActive) {
+                gateFill = activeColor;
+                gateStroke = activeColor;
+                labelFill = activeText;
             }
 
-            // Two text elements: typeLabel (body center) and userLabel (below)
+            const shape = this.getGateShape(gate.type);
+
+            const bodyPath = g.querySelector(".automaton-gate-body") as SVGPathElement;
+            if (bodyPath) {
+                bodyPath.setAttribute("d", shape.body);
+                bodyPath.setAttribute("fill", gateFill);
+                bodyPath.setAttribute("stroke", gateStroke);
+            }
+
+            const linePath = g.querySelector(".automaton-gate-lines") as SVGPathElement;
+            if (linePath) {
+                if (shape.lines) {
+                    linePath.setAttribute("d", shape.lines);
+                    linePath.setAttribute("stroke", gateStroke);
+                    linePath.style.display = "";
+                } else {
+                    linePath.style.display = "none";
+                }
+            }
+
             const allTexts = Array.from(g.querySelectorAll("text")) as SVGTextElement[];
             const typeLabel = allTexts[0];
             const userLabel = allTexts[1];
@@ -2225,11 +2360,10 @@ export class SvgGraphEditor {
             if (typeLabel) {
                 typeLabel.setAttribute("x", "0");
                 typeLabel.setAttribute("y", "0");
-                typeLabel.setAttribute("fill", txt);
-                if (gate.type === "INPUT" || gate.type === "OUTPUT") {
-                    // Show value inside input/output shape
+                typeLabel.setAttribute("fill", labelFill);
+                if (isIO) {
                     typeLabel.setAttribute("font-size", "11");
-                    typeLabel.textContent = active ? "1" : "0";
+                    typeLabel.textContent = outputActive ? "1" : "0";
                 } else {
                     typeLabel.setAttribute("font-size", "9");
                     typeLabel.textContent = gate.type;
@@ -2238,27 +2372,29 @@ export class SvgGraphEditor {
             if (userLabel) {
                 userLabel.setAttribute("x", "0");
                 userLabel.setAttribute("y", (GATE_SIZE.h / 2 + 13).toString());
-                userLabel.setAttribute("fill", txt);
+                userLabel.setAttribute("fill", standardText);
                 userLabel.setAttribute("font-size", "10");
-                const hasCustomLabel = gate.label !== undefined && gate.label !== "";
-                userLabel.textContent = hasCustomLabel ? gate.label ?? "" : "";
+                userLabel.textContent = gate.label ?? "";
             }
 
-            // Update port colors
+            // Update ports
             const portEls = g.querySelectorAll("circle[data-gate-port]");
             portEls.forEach((el) => {
                 const portEl = el as SVGCircleElement;
                 const portName = portEl.dataset.gatePort ?? "";
                 const isOut = portName === "out";
-                const portActive = isOut
-                    ? active
-                    : this.simulator.getPortValue(gate.id, portName);
-                portEl.setAttribute("fill", portActive ? "#22c55e" : fill);
-                portEl.setAttribute("stroke", portActive ? "#16a34a" : stroke);
+                const portActive = isOut ? outputActive : this.simulator.getPortValue(gate.id, portName);
+                
+                const pFill = portActive ? activeColor : standardFill;
+                const pStroke = portActive ? activeColor : standardStroke;
+
+                portEl.setAttribute("fill", pFill);
+                portEl.setAttribute("stroke", pStroke);
+                portEl.setAttribute("stroke-width", "1.5");
             });
         });
 
-        // Update wire paths and colors
+        // --- UPDATE WIRES (UNCHANGED) ---
         this.wires.forEach(wire => {
             const pathEl = this.wireElements.get(wire.id);
             if (!pathEl) return;
@@ -2278,14 +2414,13 @@ export class SvgGraphEditor {
             const x2 = toGate.position.x + tp.x;
             const y2 = toGate.position.y + tp.y;
 
-            // Build path: use waypoints if present, else default cubic bezier
+            // Build path: use waypoints if present, else default dynamic routing
             let wirePath: string;
             if (wire.waypoints && wire.waypoints.length > 0) {
                 const wps = wire.waypoints;
                 let p = `M ${x1} ${y1}`;
                 if (wps.length === 1) {
                     const cp = wps[0];
-                    // FIX: Respect the "linear" flag instead of forcing a curve
                     if (cp.type === "linear") {
                         p += ` L ${cp.x} ${cp.y} L ${x2} ${y2}`;
                     } else {
@@ -2308,9 +2443,7 @@ export class SvgGraphEditor {
                 }
                 wirePath = p;
             } else {
-                // DEFAULT ROUTING (No waypoints)
                 if (this.straightWires) {
-                    // FIX: Dynamic Manhattan (90-degree) routing
                     const midX = (x1 + x2) / 2;
                     wirePath = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
                 } else {
@@ -2318,20 +2451,25 @@ export class SvgGraphEditor {
                 }
             }
 
-            // Sync hitbox (element before the visible path)
             const hitboxEl = pathEl.previousElementSibling as SVGPathElement;
             if (hitboxEl?.dataset.wireId === wire.id) {
                 hitboxEl.setAttribute("d", wirePath);
             }
             pathEl.setAttribute("d", wirePath);
 
-            const active = this.simulator.getWireValue(wire);
-            pathEl.setAttribute("stroke", active ? activeWireColor : (this.theme.edgeStroke || "var(--text-muted)"));
-            pathEl.setAttribute("stroke-width", active ? "2.5" : "2");
-            if (active) {
+            const wireActive = this.simulator.getWireValue(wire);
+            
+            // Apply theme colors and animation to active wires
+            pathEl.setAttribute("stroke", wireActive ? activeColor : (this.theme.edgeStroke || "var(--text-muted)"));
+            pathEl.setAttribute("stroke-width", wireActive ? "2.5" : "2");
+            
+            if (wireActive) {
                 pathEl.classList.add("automaton-wire-active");
+                // The drop shadow now perfectly matches whatever theme color is active
+                pathEl.style.filter = `drop-shadow(0 0 3px ${activeColor})`;
             } else {
                 pathEl.classList.remove("automaton-wire-active");
+                pathEl.style.filter = "none";
             }
 
             // Draw waypoint handles if wire is bendable
@@ -2365,89 +2503,37 @@ export class SvgGraphEditor {
     }
 
     // IEEE gate shapes in local coords centered at 0,0
-    private getGateShape(type: GateType): string {
+    private getGateShape(type: GateType): { body: string; lines?: string } {
         const { w, h } = GATE_SIZE;  // w=54, h=40
         const hw = w / 2, hh = h / 2;
 
         switch (type) {
             case 'AND':
-                return [
-                    `M ${-hw} ${-hh}`,
-                    `L ${0} ${-hh}`,
-                    `C ${hw + 4} ${-hh} ${hw + 4} ${hh} ${0} ${hh}`,  // control points pushed out so curve peaks at hw
-                    `L ${-hw} ${hh}`,
-                    `Z`,
-                ].join(' ');
-
+                return { body: `M ${-hw} ${-hh} L ${0} ${-hh} C ${hw + 4} ${-hh} ${hw + 4} ${hh} ${0} ${hh} L ${-hw} ${hh} Z` };
             case 'NAND':
-                return [
-                    `M ${-hw} ${-hh}`,
-                    `L ${0} ${-hh}`,
-                    `C ${hw - 1} ${-hh} ${hw - 1} ${hh} ${0} ${hh}`,
-                    `L ${-hw} ${hh}`,
-                    `Z`,
-                    `M ${hw} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-                ].join(' ');
-
+                return { body: `M ${-hw} ${-hh} L ${0} ${-hh} C ${hw - 1} ${-hh} ${hw - 1} ${hh} ${0} ${hh} L ${-hw} ${hh} Z M ${hw} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0` };
             case 'OR':
-                return [
-                    `M ${-hw} ${-hh}`,
-                    `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,   // top: flat-ish top sweeping to tip
-                    `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,   // bottom: tip back to bottom-left
-                    `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,  // concave left
-                    `Z`,
-                ].join(' ');
-
+                return { body: `M ${-hw} ${-hh} C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0} C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh} C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh} Z` };
             case 'NOR':
-                return [
-                    `M ${-hw} ${-hh}`,
-                    `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
-                    `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh}`,
-                    `C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh}`,
-                    `Z`,
-                    `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-                ].join(' ');
-
+                return { body: `M ${-hw} ${-hh} C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0} C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh} C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0` };
             case 'XOR':
-                return [
-                    `M ${-hw + 4} ${-hh}`,
-                    `C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0}`,
-                    `C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
-                    `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
-                    `Z`,
-                    // extra back line offset to the left
-                    `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
-                ].join(' ');
-
+                return { 
+                    body: `M ${-hw + 4} ${-hh} C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0} C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh} C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh} Z`,
+                    lines: `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`
+                };
             case 'XNOR':
-                return [
-                    `M ${-hw + 4} ${-hh}`,
-                    `C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0}`,
-                    `C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh}`,
-                    `C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh}`,
-                    `Z`,
-                    `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`,
-                    `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-                ].join(' ');
-
+                return {
+                    body: `M ${-hw + 4} ${-hh} C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0} C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh} C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
+                    lines: `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`
+                };
             case 'NOT':
-                // Triangle pointing right + bubble
-                return [
-                    `M ${-hw} ${-hh}`,
-                    `L ${-hw} ${hh}`,
-                    `L ${hw - 6} ${0}`,
-                    `Z`,
-                    `M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`,
-                ].join(' ');
-
+                return { body: `M ${-hw} ${-hh} L ${-hw} ${hh} L ${hw - 6} ${0} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0` };
             case 'INPUT':
-                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.6} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.6} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
-
+                return { body: `M ${-hw} ${-hh * 0.7} L ${hw * 0.6} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.6} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z` };
             case 'OUTPUT':
-                return `M ${-hw} ${-hh * 0.7} L ${hw * 0.4} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.4} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z`;
-
+                return { body: `M ${-hw} ${-hh * 0.7} L ${hw * 0.4} ${-hh * 0.7} L ${hw} 0 L ${hw * 0.4} ${hh * 0.7} L ${-hw} ${hh * 0.7} Z` };
             default:
-                return `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z`;
+                return { body: `M ${-hw} ${-hh} L ${hw} ${-hh} L ${hw} ${hh} L ${-hw} ${hh} Z` };
         }
     }
 
@@ -2705,5 +2791,6 @@ export class SvgGraphEditor {
 
     public destroy() {
         this.contextMenu?.parentNode && this.contextMenu.remove();
+        this.resizeObservers.forEach(ro => ro.disconnect());
     }
 }

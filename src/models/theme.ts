@@ -51,7 +51,12 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#e2e2e2",
             edgeStroke: "#a0a0b0",
             startArrow: "#e2e2e2",
-            acceptCircle: "#7ec8e3"
+            acceptCircle: "#7ec8e3",
+            gateFill: "#16213e",
+            gateStroke: "#e2e2e2",
+            wireActive: "#7ec8e3",
+            groupFill: "rgba(120,120,180,0.06)",
+            groupStroke: "#a0a0b0"
         }
     },
     {
@@ -63,7 +68,12 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#3d2b1f",
             edgeStroke: "#8b7355",
             startArrow: "#5c4a2a",
-            acceptCircle: "#8b4513"
+            acceptCircle: "#8b4513",
+            gateFill: "#ede8df",
+            gateStroke: "#5c4a2a",
+            wireActive: "#8b4513",
+            groupFill: "rgba(200,150,100,0.06)",
+            groupStroke: "#8b7355"
         }
     },
     {
@@ -75,7 +85,12 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#00ff99",
             edgeStroke: "#00cc77",
             startArrow: "#00ff99",
-            acceptCircle: "#ff00ff"
+            acceptCircle: "#ff00ff",
+            gateFill: "#111111",
+            gateStroke: "#00ff99",
+            wireActive: "#ff00ff",
+            groupFill: "rgba(255,0,255,0.06)",
+            groupStroke: "#ff00ff"
         }
     },
     {
@@ -87,7 +102,12 @@ export const THEME_PRESETS: AutomatonThemePreset[] = [
             text: "#c9e8ff",
             edgeStroke: "#4a8db7",
             startArrow: "#5ba4cf",
-            acceptCircle: "#7ecfff"
+            acceptCircle: "#7ecfff",
+            gateFill: "#0d3060",
+            gateStroke: "#5ba4cf",
+            wireActive: "#7ecfff",
+            groupFill: "rgba(120,160,200,0.06)",
+            groupStroke: "#5ba4cf"
         }
     }
 ];

@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting, setIcon } from "obsidian";
 import InGraphPlugin from "../index";
 import { GraphTheme, THEME_PRESETS } from "../models/theme";
 
@@ -17,19 +17,25 @@ export class InGraphSettingTab extends PluginSettingTab {
 
         containerEl.addClass("automaton-settings-root");
 
+        // Main Header
         const header = containerEl.createDiv({ cls: "automaton-settings-header" });
-        header.createEl("h2", { text: "In-Graph settings" });
+        header.createEl("h2", { text: "In-Graph Settings" });
         header.createEl("p", {
-            text: "Tune visuals, editing behavior, and keyboard flow for in-graph blocks.",
+            text: "Tune visuals, editing behavior, and keyboard flow for your graphs and circuits.",
             cls: "automaton-settings-intro"
         });
 
-        const createSection = (title: string, desc?: string, isOpen = true) => {
+        // Helper to create collapsible sections with Icons
+        const createSection = (title: string, icon: string, desc?: string, isOpen = true) => {
             const section = containerEl.createEl("details", { cls: "automaton-settings-section" });
             if (isOpen) section.setAttr("open", "");
 
             const summary = section.createEl("summary", { cls: "automaton-settings-section-summary" });
-            summary.createEl("h3", { text: title, cls: "automaton-settings-section-title" });
+            
+            const titleWrap = summary.createDiv({ cls: "automaton-settings-title-wrap" });
+            const iconEl = titleWrap.createSpan({ cls: "automaton-settings-icon" });
+            setIcon(iconEl, icon);
+            titleWrap.createEl("h3", { text: title, cls: "automaton-settings-section-title" });
 
             const content = section.createDiv({ cls: "automaton-settings-section-content" });
             if (desc) content.createEl("p", { text: desc, cls: "automaton-settings-section-desc" });
@@ -38,12 +44,11 @@ export class InGraphSettingTab extends PluginSettingTab {
         };
 
         // ─── SECTION: Appearance ─────────────────────────────────────────────────
-
-        const appearanceSection = createSection("Appearance", "Choose a preset theme or customize every color token.");
+        const appearanceSection = createSection("Appearance", "palette", "Choose a preset theme or customize every color token.", true);
 
         new Setting(appearanceSection)
-            .setName("Theme")
-            .setDesc("Visual style for all graphs. Individual graphs can still override this.")
+            .setName("Active Theme")
+            .setDesc("Visual style for all graphs. Individual graphs can still override this via DSL.")
             .addDropdown(drop => {
                 THEME_PRESETS.forEach(p => drop.addOption(p.name, p.name));
                 drop.addOption("Custom", "Custom…");
@@ -58,50 +63,64 @@ export class InGraphSettingTab extends PluginSettingTab {
 
         // Live preview
         const previewWrap = appearanceSection.createDiv({ cls: "automaton-settings-preview-wrap" });
-        previewWrap.createEl("p", { text: "Preview", cls: "automaton-settings-preview-label" });
+        previewWrap.createEl("div", { text: "Live Preview", cls: "automaton-settings-preview-label" });
         const previewEl = previewWrap.createDiv({ cls: "automaton-settings-preview" });
         this.renderPreview(previewEl, this.plugin.settings.activeTheme);
 
-        // Custom theme color pickers
+        // Custom theme color pickers (Categorized!)
         const customSection = appearanceSection.createDiv({ cls: "automaton-custom-theme-section" });
         this.customColorRows = [];
 
-        const colorFields: { key: keyof GraphTheme; label: string; desc: string }[] = [
+        const addColorGroup = (title: string, fields: { key: keyof GraphTheme; label: string; desc: string }[]) => {
+            const header = new Setting(customSection).setHeading().setName(title);
+            this.customColorRows.push(header.settingEl);
+
+            fields.forEach(({ key, label, desc }) => {
+                const row = new Setting(customSection)
+                    .setName(label)
+                    .setDesc(desc)
+                    .addColorPicker(cp => {
+                        const current = this.plugin.settings.customTheme[key];
+                        if (current) cp.setValue(current);
+                        cp.onChange(async (val) => {
+                            this.plugin.settings.customTheme[key] = val;
+                            await this.plugin.saveSettings();
+                            this.renderPreview(previewEl, "Custom");
+                        });
+                    });
+                this.customColorRows.push(row.settingEl);
+            });
+        };
+
+        addColorGroup("Canvas & Text", [
             { key: "background", label: "Background", desc: "Canvas background color" },
+            { key: "text", label: "Text color", desc: "Labels on nodes, edges, and gates" },
+        ]);
+
+        addColorGroup("Automata (Nodes & Edges)", [
             { key: "nodeFill", label: "Node fill", desc: "Inside of state circles" },
             { key: "nodeStroke", label: "Node border", desc: "Outline of state circles" },
-            { key: "text", label: "Text", desc: "Labels on nodes and edges" },
-            { key: "edgeStroke", label: "Edge color", desc: "Transition arrows and lines" },
-            { key: "startArrow", label: "Start arrow", desc: "Arrow indicating start state" },
             { key: "acceptCircle", label: "Accept ring", desc: "Inner ring of accepting states" },
-            { key: "gateStroke", label: "Gate border", desc: "Outline of logic gates" },
-            { key: "gateFill", label: "Gate fill", desc: "Inside of logic gates" },
-            { key: "wireActive", label: "Active wire", desc: "Color of live circuit wires" },
-            { key: "groupFill", label: "Group fill", desc: "Background of group frames" },
-            { key: "groupStroke", label: "Group border", desc: "Outline of group frames" },
-        ];
+            { key: "edgeStroke", label: "Edge color", desc: "Transition arrows and lines" },
+            { key: "startArrow", label: "Start arrow", desc: "Arrow indicating the start state" },
+        ]);
 
-        colorFields.forEach(({ key, label, desc }) => {
-            const row = new Setting(customSection)
-                .setName(label)
-                .setDesc(desc)
-                .addColorPicker(cp => {
-                    const current = this.plugin.settings.customTheme[key];
-                    if (current) cp.setValue(current);
-                    cp.onChange(async (val) => {
-                        this.plugin.settings.customTheme[key] = val;
-                        await this.plugin.saveSettings();
-                        this.renderPreview(previewEl, "Custom");
-                    });
-                });
-            this.customColorRows.push(row.settingEl);
-        });
+        addColorGroup("Logic Circuits", [
+            { key: "gateFill", label: "Gate fill", desc: "Inside of logic gates" },
+            { key: "gateStroke", label: "Gate border", desc: "Outline of logic gates" },
+            { key: "wireActive", label: "Active wire", desc: "Color of live circuit wires (High signal)" },
+        ]);
+
+        addColorGroup("Frames", [
+            { key: "groupFill", label: "Frame fill", desc: "Background tint of group frames" },
+            { key: "groupStroke", label: "Frame border", desc: "Outline and text of group frames" },
+        ]);
 
         this.toggleCustomRows(this.plugin.settings.activeTheme === "Custom");
 
-        // ─── SECTION: DSL editor ─────────────────────────────────────────────────
 
-        const dslSection = createSection("DSL editor", "Control where the DSL panel opens and how parsed wires are routed.");
+        // ─── SECTION: DSL editor ─────────────────────────────────────────────────
+        const dslSection = createSection("DSL Editor & Routing", "code", "Configure the text editor behavior and automatic wire routing.", false);
 
         new Setting(dslSection)
             .setName("Panel position")
@@ -118,7 +137,7 @@ export class InGraphSettingTab extends PluginSettingTab {
 
         new Setting(dslSection)
             .setName("Click canvas to open DSL editor")
-            .setDesc("Clicking the graph background opens the DSL panel automatically.")
+            .setDesc("Clicking empty space on the graph automatically opens the DSL panel.")
             .addToggle(tog => {
                 tog.setValue(this.plugin.settings.clickBgOpensDsl ?? false);
                 tog.onChange(async (val) => {
@@ -128,8 +147,8 @@ export class InGraphSettingTab extends PluginSettingTab {
             });
 
         new Setting(dslSection)
-            .setName("Straight wire routing")
-            .setDesc("Route circuit wires as 90° L-shapes instead of curves when building from DSL.")
+            .setName("Orthogonal wire routing")
+            .setDesc("Route circuit wires using 90° Manhattan lines instead of sweeping curves.")
             .addToggle(tog => {
                 tog.setValue(this.plugin.settings.straightWires ?? false);
                 tog.onChange(async (val) => {
@@ -139,8 +158,8 @@ export class InGraphSettingTab extends PluginSettingTab {
             });
 
         new Setting(dslSection)
-            .setName("Custom snippets")
-            .setDesc("Enable loading of user-defined DSL snippets from a file in your vault.")
+            .setName("Enable custom snippets")
+            .setDesc("Load a custom array of regex snippets for rapid MathJax typing.")
             .addToggle(tog => {
                 tog.setValue(this.plugin.settings.customSnippetsEnabled ?? false);
                 tog.onChange(async (val) => {
@@ -150,20 +169,20 @@ export class InGraphSettingTab extends PluginSettingTab {
             });
 
         new Setting(dslSection)
-            .setName("Custom Snippets File")
-            .setDesc("Path to your snippets file in the vault (e.g., 'snippets.txt'). Leave empty to use defaults.")
+            .setName("Custom snippets file path")
+            .setDesc("Path to your snippets file in the vault (e.g., 'snippets.js'). Leave empty to use defaults.")
             .addText(text => text
-                .setPlaceholder("snippets.txt")
+                .setPlaceholder("snippets.js")
                 .setValue(this.plugin.settings.snippetsPath)
                 .onChange(async (value) => {
                     this.plugin.settings.snippetsPath = value;
                     await this.plugin.saveSettings();
-                    await this.plugin.loadCustomSnippets(); // Reload instantly!
+                    await this.plugin.loadCustomSnippets();
                 }));
 
-        // ─── SECTION: Behaviour ──────────────────────────────────────────────────
 
-        const behaviorSection = createSection("Behaviour", "Set defaults for undo depth and graph sizing.");
+        // ─── SECTION: Behaviour ──────────────────────────────────────────────────
+        const behaviorSection = createSection("Behaviour & Limits", "settings", "Set defaults for undo depth and graph sizing.", false);
 
         new Setting(behaviorSection)
             .setName("Undo history size")
@@ -180,7 +199,7 @@ export class InGraphSettingTab extends PluginSettingTab {
 
         new Setting(behaviorSection)
             .setName("Default graph height")
-            .setDesc("Height in pixels for new graphs that have no saved viewport.")
+            .setDesc("Height in pixels for new graphs that have no saved viewport yet.")
             .addSlider(sl => {
                 sl.setLimits(150, 800, 50);
                 sl.setValue(this.plugin.settings.defaultHeight ?? 300);
@@ -191,14 +210,9 @@ export class InGraphSettingTab extends PluginSettingTab {
                 });
             });
 
+
         // ─── SECTION: Keyboard shortcuts reference ────────────────────────────────
-
-        const shortcutsSection = createSection("Keyboard shortcuts", undefined, false);
-
-        shortcutsSection.createEl("p", {
-            text: "Commands can be remapped in Settings → Hotkeys.",
-            cls: "setting-item-description automaton-settings-section-desc"
-        });
+        const shortcutsSection = createSection("Keyboard Shortcuts", "keyboard", "Commands can be remapped in Obsidian's standard Hotkeys menu.", false);
 
         const shortcuts: { keys: string; action: string }[] = [
             { keys: "Ctrl+Shift+G", action: "Toggle DSL editor (nearest graph)" },
@@ -228,6 +242,7 @@ export class InGraphSettingTab extends PluginSettingTab {
     }
 
     private renderPreview(container: HTMLElement, themeName: string) {
+        // ... (Keep your exact renderPreview implementation here!) ...
         container.empty();
 
         let theme: GraphTheme;

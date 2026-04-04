@@ -368,6 +368,32 @@ path[stroke="rgba(0,0,0,0.01)"]
     padding: 8px;
 }
 
+.automaton-settings-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.automaton-settings-icon {
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+}
+
+.automaton-settings-section[open] .automaton-settings-icon {
+    color: var(--interactive-accent);
+}
+
+.automaton-settings-section-title {
+    margin: 0 !important;
+}
+
+.automaton-settings-section .setting-item-heading {
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 4px;
+    margin-top: 16px;
+}
+
 /* Custom theme section */
 .automaton-custom-theme-section
 {
@@ -803,10 +829,8 @@ circle[data-gate-port]
 
 .automaton-wire-active
 {
-    stroke: #facc15 !important;
     stroke-dasharray: 10 6;
     animation: wire-flow 0.35s linear infinite;
-    filter: drop-shadow(0 0 3px #facc15);
 }
 
 /* ─── GATE PORT HOVER ─── */

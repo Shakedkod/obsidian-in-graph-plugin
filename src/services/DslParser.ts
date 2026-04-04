@@ -1,6 +1,6 @@
 import { CircuitGate, CircuitWire, GateType } from "src/models/circuits";
 import { GraphEdge, GraphGroup, GraphNode, Position } from "src/models/graph";
-import { ParserNode, ParserGroup, ParserInner, ParserOutput, ParserEdge, ParserGate, NODE_SPACING_Y, START_Y, NODE_SPACING_X, START_X } from "src/models/parser";
+import { ParserNode, ParserGroup, ParserInner, ParserOutput, ParserGate, NODE_SPACING_Y, START_Y, NODE_SPACING_X, START_X } from "src/models/parser";
 
 enum LineType {
     CIRCUIT, AUTOMATON, GROUP, SETTINGS, UNKNOWN,
@@ -52,7 +52,6 @@ function isInData(nodeId: string, type: LineType, data: ParserInner): boolean {
 }
 
 function processStyles(stylesStr: string): { color?: string, style?: string, active?: boolean, _via?: string, label?: string, start?: boolean, accept?: boolean } {
-    // Extract `via ...` before splitting on commas (coords contain commas)
     let viaStr: string | undefined;
     const viaIdx = stylesStr.indexOf("via ");
     if (viaIdx !== -1) {
@@ -60,40 +59,47 @@ function processStyles(stylesStr: string): { color?: string, style?: string, act
         stylesStr = stylesStr.slice(0, viaIdx);
     }
 
-    const styles = stylesStr.split(",").map(s => s.trim()).filter(Boolean);
-    const result: { color?: string, style?: string, active?: boolean, _via?: string, label?: string, start?: boolean, accept?: boolean } = {};
-    for (const style of styles) {
-        if (style.startsWith("color=")) {
-            result.color = style.split("=")[1];
-        }
-        else if (style.startsWith("style=")) {
-            result.style = style.split("=")[1];
-        }
-        else if (style.startsWith("active=")) {
-            result.active = style.split("=")[1].toLowerCase() === "true";
-        }
-        else if (style.startsWith("label=")) {
-            // strip surrounding quotes if present
-            result.label = style.slice(6).trim().replace(/^["']|["']$/g, "");
-        }
-        else if (style === "start") {
-            result.start = true;
-        }
-        else if (style === "accept") {
-            result.accept = true;
+    // 1. Smart Split: Separate by commas, but IGNORE commas inside quotes
+    const styles: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    
+    for (let i = 0; i < stylesStr.length; i++) {
+        const char = stylesStr[i];
+        if (char === '"' || char === "'") {
+            inQuotes = !inQuotes;
+            current += char;
+        } else if (char === ',' && !inQuotes) {
+            styles.push(current.trim());
+            current = "";
+        } else {
+            current += char;
         }
     }
-    if (viaStr) result._via = viaStr;
+    if (current) styles.push(current.trim());
 
+    // 2. Parse the safely separated attributes
+    const result: { color?: string, style?: string, active?: boolean, _via?: string, label?: string, start?: boolean, accept?: boolean } = {};
+    
+    for (const style of styles.filter(Boolean)) {
+        const eqIdx = style.indexOf("=");
+        const key = eqIdx !== -1 ? style.slice(0, eqIdx).trim() : style.trim();
+        const val = eqIdx !== -1 ? style.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "") : "";
+
+        if (key === "color") result.color = val;
+        else if (key === "style") result.style = val;
+        else if (key === "active") result.active = val.toLowerCase() === "true";
+        else if (key === "label") result.label = val;
+        else if (key === "start") result.start = true;
+        else if (key === "accept") result.accept = true;
+    }
+    
+    if (viaStr) result._via = viaStr;
     return result;
 }
 
 function addNode(id: string, data: ParserInner, groupFlag: string | null): funcOutput {
-    const node: ParserNode = {
-        id,
-        label: id,
-        shape: "circle"
-    };
+    const node: ParserNode = { id, label: id, shape: "circle" };
 
     if (!isInData(node.id, LineType.NODE, data)) {
         data.nodes.push(node);
@@ -102,42 +108,39 @@ function addNode(id: string, data: ParserInner, groupFlag: string | null): funcO
     if (groupFlag) {
         const group = data.groups.find(g => g.id === groupFlag);
         if (group) {
-            if (!group.nodes.some(n => n.id === node.id)) {
-                group.nodes.push(node);
-            }
+            if (!group.nodes.some(n => n.id === node.id)) group.nodes.push(node);
         }
         else {
             processGroupLine(`group ${groupFlag}:`, data, null);
             const newGroup = data.groups.find(g => g.id === groupFlag);
-            if (newGroup) {
-                newGroup.nodes.push(node);
-            }
-
+            if (newGroup) newGroup.nodes.push(node);
             return { data, type: LineType.GROUP, vars: { groupFlag } };
         }
     }
-
     return { data, type: LineType.NODE, vars: {} };
 }
 
-// Handles: id [label="...", color=..., start, accept]
+// FIX: Handle standalone node declarations (e.g. `q0` or `q0 [label="hi"]`)
 function processNodeAttrLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
     const bracketStart = line.indexOf("[");
-    const bracketEnd = line.lastIndexOf("]");
-    if (bracketStart === -1 || bracketEnd === -1) return { data, type: LineType.UNKNOWN, vars: {} };
+    let id = line;
+    let styles: any = {};
 
-    const id = line.slice(0, bracketStart).trim();
-    if (!id) return { data, type: LineType.UNKNOWN, vars: {} };
-
-    const attrStr = line.slice(bracketStart + 1, bracketEnd);
-    const styles = processStyles(attrStr);
-
-    // Create node if it doesn't exist yet
-    if (!isInData(id, LineType.NODE, data)) {
-        addNode(id, data, groupFlag);
+    if (bracketStart !== -1) {
+        id = line.slice(0, bracketStart).trim();
+        const bracketEnd = line.lastIndexOf("]");
+        if (bracketEnd !== -1) {
+            const attrStr = line.slice(bracketStart + 1, bracketEnd);
+            styles = processStyles(attrStr);
+        }
+    } else {
+        id = line.trim();
     }
 
-    // Apply attributes to the node
+    if (!id) return { data, type: LineType.UNKNOWN, vars: {} };
+
+    if (!isInData(id, LineType.NODE, data)) addNode(id, data, groupFlag);
+
     const node = data.nodes.find(n => n.id === id);
     if (node) {
         if (styles.label !== undefined) node.label = styles.label;
@@ -146,7 +149,6 @@ function processNodeAttrLine(line: string, data: ParserInner, groupFlag: string 
         if (styles.accept) node.isAccepting = true;
     }
 
-    // Also check if it's a gate and apply label there
     const gate = data.gates.find(g => g.id === id);
     if (gate) {
         if (styles.label !== undefined) gate.label = styles.label;
@@ -158,44 +160,35 @@ function processNodeAttrLine(line: string, data: ParserInner, groupFlag: string 
 
 function processAutomatonLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
     const parts = line.split("->").map(p => p.trim());
-    if (parts.length !== 2) {
-        return { data, type: LineType.UNKNOWN, vars: {} };
-    }
+    if (parts.length !== 2) return { data, type: LineType.UNKNOWN, vars: {} };
 
     const right = parts[1].trim();
-
     let targetId = right;
     let label: string | undefined;
-    let styles: { color?: string, style?: string, active?: boolean } = {};
+    let styles: any = {};
 
     if (right.includes(":")) {
         const colonIndex = right.indexOf(":");
-
         targetId = right.slice(0, colonIndex).trim();
         const rest = right.slice(colonIndex + 1).trim();
 
         if (rest.includes("[")) {
             const styleStart = rest.indexOf("[");
             label = rest.slice(0, styleStart).trim();
-
-            const styleContent = rest.slice(styleStart + 1, rest.lastIndexOf("]"));
-            styles = processStyles(styleContent);
+            styles = processStyles(rest.slice(styleStart + 1, rest.lastIndexOf("]")));
         } else {
             label = rest;
         }
-    } else {
-        targetId = right.trim();
     }
 
     const sourceId = parts[0].trim();
     const sourceResult = addNode(sourceId, data, groupFlag);
     const targetResult = addNode(targetId, data, groupFlag);
 
-    // Parse optional waypoints: `via x,yb; x,yl` inside style bracket
     let waypoints: { x: number; y: number; type: "bezier" | "linear" }[] | undefined;
-    const viaStr = (styles as any)._via as string | undefined;
+    const viaStr = styles._via;
     if (viaStr) {
-        waypoints = viaStr.split(";").map(s => s.trim()).filter(Boolean).map(pt => {
+        waypoints = viaStr.split(";").map((s: string) => s.trim()).filter(Boolean).map((pt: string) => {
             const isLinear = pt.endsWith("l");
             const clean = pt.replace(/[bl]$/, "");
             const [x, y] = clean.split(",").map(Number);
@@ -203,51 +196,39 @@ function processAutomatonLine(line: string, data: ParserInner, groupFlag: string
         });
     }
 
-    const edgeId = `edge-${crypto.randomUUID()}`;
-    const edge: ParserEdge = {
-        id: edgeId,
+    data.edges.push({
+        id: `edge-${crypto.randomUUID()}`,
         from: sourceId,
         to: targetId,
         label,
         color: styles.color,
         style: styles.style,
         waypoints
-    };
+    });
 
-    data.edges.push(edge);
     return { data, type: LineType.AUTOMATON, vars: { groupFlag: groupFlag ?? sourceResult.vars.groupFlag ?? targetResult.vars.groupFlag } };
 }
 
 function processGateLine(line: string, data: ParserInner, groupFlag: string | null): funcOutput {
-    // 1. Split ONLY on the first '=' to avoid breaking on label="hi"
     const eqIdx = line.indexOf("=");
-    if (eqIdx === -1) {
-        return { data, type: LineType.UNKNOWN, vars: {} };
-    }
+    if (eqIdx === -1) return { data, type: LineType.UNKNOWN, vars: {} };
 
     const gateId = line.slice(0, eqIdx).trim();
     let rightSide = line.slice(eqIdx + 1).trim();
 
-    // 2. Extract styling
     const hasStyling = rightSide.includes(" [");
     let color = undefined, active = false, gateLabel: string | undefined;
     
     if (hasStyling) {
         const styleStart = rightSide.indexOf(" [");
-        const stylePart = rightSide.slice(styleStart + 2, rightSide.lastIndexOf("]")).trim();
-        const styles = processStyles(stylePart);
-        
+        const styles = processStyles(rightSide.slice(styleStart + 2, rightSide.lastIndexOf("]")).trim());
         color = styles.color;
         active = styles.active ?? false;
         gateLabel = styles.label;
-        
-        // Strip the styling block out so we can parse the gate type cleanly
         rightSide = rightSide.slice(0, styleStart).trim();
     }
 
-    // 3. Parse Gate Type and Inputs
     const match = rightSide.match(/^(\w+)\s*\((.*)\)/);
-
     let type: GateType;
     let inputs: string[] = [];
 
@@ -258,32 +239,17 @@ function processGateLine(line: string, data: ParserInner, groupFlag: string | nu
         type = rightSide.trim().toUpperCase() as GateType;
     }
 
-    const gate: ParserGate = {
-        id: gateId,
-        type: type,
-        color: color,
-        active: active,
-        label: gateLabel
-    };
+    const gate: ParserGate = { id: gateId, type, color, active, label: gateLabel };
 
-    if (!isInData(gate.id, LineType.GATE, data)) {
-        data.gates.push(gate);
-    }
+    if (!isInData(gate.id, LineType.GATE, data)) data.gates.push(gate);
 
     if (groupFlag) {
         const group = data.groups.find(g => g.id === groupFlag);
         if (group) {
-            if (!group.gates.some(g => g.id === gate.id)) {
-                group.gates.push(gate);
-            }
-        }
-        else {
+            if (!group.gates.some(g => g.id === gate.id)) group.gates.push(gate);
+        } else {
             processGroupLine(`group ${groupFlag}:`, data, null);
-            const newGroup = data.groups.find(g => g.id === groupFlag);
-            if (newGroup) {
-                newGroup.gates.push(gate);
-            }
-
+            data.groups.find(g => g.id === groupFlag)?.gates.push(gate);
             return { data, type: LineType.GROUP, vars: { groupFlag } };
         }
     }
@@ -308,56 +274,27 @@ function processSettingsLine(line: string, data: ParserInner, groupFlag: string 
     const settingsPart = parts[1].trim();
 
     if (type === "row") {
-        const inRow = settingsPart.split(",").map(s => s.trim()).filter(Boolean);
-        data.layout.rows.push(inRow);
+        data.layout.rows.push(settingsPart.split(",").map(s => s.trim()).filter(Boolean));
         return { data, type: LineType.SETTINGS, vars: {} };
     }
-    // accept both "col" and "column"
     else if (type === "col" || type === "column") {
-        const inColumn = settingsPart.split(",").map(s => s.trim()).filter(Boolean);
-        data.layout.columns.push(inColumn);
+        data.layout.columns.push(settingsPart.split(",").map(s => s.trim()).filter(Boolean));
         return { data, type: LineType.SETTINGS, vars: {} };
     }
 
-    if (type === "start") {
-        const nodesToChange = [];
-
-        for (const id of settingsPart.split(",").map(s => s.trim())) {
-            nodesToChange.push(id);
-        }
-
-        for (const nodeId of nodesToChange) {
-            const node = data.nodes.find(n => n.id === nodeId);
-            if (node) {
-                node.isStart = true;
+    if (type === "start" || type === "accept") {
+        for (const nodeId of settingsPart.split(",").map(s => s.trim())) {
+            let node = data.nodes.find(n => n.id === nodeId);
+            if (!node) {
+                addNode(nodeId, data, groupFlag);
+                node = data.nodes.find(n => n.id === nodeId);
             }
-            else {
-                const newNode = addNode(nodeId, data, groupFlag);
-                newNode.data.nodes.find(n => n.id === nodeId)!.isStart = true;
-                data = newNode.data;
+            if (node) {
+                if (type === "start") node.isStart = true;
+                if (type === "accept") node.isAccepting = true;
             }
         }
     }
-    else if (type === "accept") {
-        const nodesToChange = [];
-
-        for (const id of settingsPart.split(",").map(s => s.trim())) {
-            nodesToChange.push(id);
-        }
-
-        for (const nodeId of nodesToChange) {
-            const node = data.nodes.find(n => n.id === nodeId);
-            if (node) {
-                node.isAccepting = true;
-            }
-            else {
-                const newNode = addNode(nodeId, data, groupFlag);
-                newNode.data.nodes.find(n => n.id === nodeId)!.isAccepting = true;
-                data = newNode.data;
-            }
-        }
-    }
-
     return { data, type: LineType.SETTINGS, vars: {} };
 }
 
@@ -366,54 +303,35 @@ function processLine(line: string, data: ParserInner, groupFlag: string | null):
 
     if (line.startsWith("group ")) {
         type = LineType.GROUP;
-    }
-    else {
+    } else {
         let inBracket = 0;
         for (const char of line) {
             if (char === "[") { inBracket++; continue; }
             if (char === "]") { inBracket--; continue; }
-            if (inBracket > 0) continue; // skip = inside [...]
-            switch (char) {
-                case "=":
-                    type = LineType.GATE;
-                    break;
-            }
-
-            if (type !== LineType.UNKNOWN) break;
+            if (inBracket > 0) continue; 
+            if (char === "=") { type = LineType.GATE; break; }
         }
 
         if (type === LineType.UNKNOWN) {
-            if (/^(start|accept|row|col)\s*:/.test(line)) {
-                type = LineType.SETTINGS;
-            }
-            else if (line.includes("->")) {
-                type = LineType.AUTOMATON;
-            }
-            // id [attrs] — node/gate attribute line
-            else if (/^\w[\w.]*\s*\[/.test(line)) {
-                type = LineType.NODE_ATTR;
-            }
+            if (/^(start|accept|row|col)\s*:/.test(line)) type = LineType.SETTINGS;
+            else if (line.includes("->")) type = LineType.AUTOMATON;
+            // FIX: Allow standalone IDs to act as node declarations
+            else if (/^[a-zA-Z0-9_.-]+(\s*\[.*\])?$/.test(line)) type = LineType.NODE_ATTR;
         }
     }
 
     switch (type) {
-        case LineType.GATE:
-            return processGateLine(line, data, groupFlag);
-        case LineType.AUTOMATON:
-            return processAutomatonLine(line, data, groupFlag);
-        case LineType.GROUP:
-            return processGroupLine(line, data, groupFlag);
-        case LineType.SETTINGS:
-            return processSettingsLine(line, data, groupFlag);
-        case LineType.NODE_ATTR:
-            return processNodeAttrLine(line, data, groupFlag);
+        case LineType.GATE: return processGateLine(line, data, groupFlag);
+        case LineType.AUTOMATON: return processAutomatonLine(line, data, groupFlag);
+        case LineType.GROUP: return processGroupLine(line, data, groupFlag);
+        case LineType.SETTINGS: return processSettingsLine(line, data, groupFlag);
+        case LineType.NODE_ATTR: return processNodeAttrLine(line, data, groupFlag);
     }
-
     return { data, type: LineType.UNKNOWN, vars: { line: line } };
 }
 
 export function getParsedDsl(dsl: string): ParserInner {
-    const lines = dsl.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+    const lines = dsl.split("\n");
     const data: ParserInner = {
         nodes: [], edges: [], gates: [], wires: [], groups: [],
         layout: {
@@ -423,7 +341,21 @@ export function getParsedDsl(dsl: string): ParserInner {
     };
     let groupFlag: string | null = null;
 
-    for (const line of lines) {
+    for (const rawLine of lines) {
+        // 1. A completely blank line automatically closes the current group
+        if (rawLine.trim().length === 0) {
+            groupFlag = null; 
+            continue;
+        }
+
+        const isIndented = rawLine.startsWith(" ") || rawLine.startsWith("\t");
+        const line = rawLine.trim();
+
+        // 2. If a line is NOT indented (and isn't the start of a new group), close the group
+        if (!isIndented && !line.startsWith("group ")) {
+            groupFlag = null; 
+        }
+
         const { type, vars } = processLine(line, data, groupFlag);
 
         if (type === LineType.UNKNOWN) {
@@ -915,9 +847,6 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
     // =========================
     const nodes: GraphNode[] = parsed.nodes.map(n => {
         const label = n.label ?? n.id;
-        // Estimate text width: ~7px per char at font-size 12, min radius 25
-        const estWidth = label.replace(/\$[^$]*\$/g, '').length * 7;
-        const radius = Math.max(25, Math.ceil(estWidth / 2) + 10);
         return {
             id: n.id,
             position: positions.get(n.id)!,
@@ -925,7 +854,7 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
             isAccepting: n.isAccepting,
             isStart: n.isStart,
             color: n.color,
-            radius
+            radius: 25
         } as any;
     });
 
@@ -1084,7 +1013,6 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
             y: box.y,
             w: box.w,
             h: box.h,
-            color: "rgba(100, 100, 255, 0.15)"
         };
 
         return [
@@ -1111,36 +1039,102 @@ export default function parseDSL(dsl: string, opts: { straightWires?: boolean } 
 export function serializeToDSL(output: ParserOutput): string {
     const lines: string[] = [];
 
-    // =========================
-    // 1. SETTINGS
-    // =========================
     const startNodes = output.nodes?.filter(n => n.isStart).map(n => n.id) ?? [];
     const acceptNodes = output.nodes?.filter(n => n.isAccepting).map(n => n.id) ?? [];
+    if (startNodes.length) lines.push(`start: ${startNodes.join(", ")}`);
+    if (acceptNodes.length) lines.push(`accept: ${acceptNodes.join(", ")}`);
 
-    if (startNodes.length)
-        lines.push(`start: ${startNodes.join(", ")}`);
+    for (const row of (output as any).layout?.rows ?? []) lines.push(`row: ${row.join(", ")}`);
+    for (const col of (output as any).layout?.columns ?? []) lines.push(`col: ${col.join(", ")}`);
 
-    if (acceptNodes.length)
-        lines.push(`accept: ${acceptNodes.join(", ")}`);
+    // 1. Assign items geometrically to their frames
+    const groupContains = (grp: GraphGroup, p: Position) => 
+        p.x >= grp.x && p.x <= grp.x + grp.w && p.y >= grp.y && p.y <= grp.y + grp.h;
 
-    // Emit row/col layout directives so they survive Apply round-trips
-    for (const row of (output as any).layout?.rows ?? []) {
-        lines.push(`row: ${row.join(", ")}`);
-    }
-    for (const col of (output as any).layout?.columns ?? []) {
-        lines.push(`col: ${col.join(", ")}`);
-    }
+    const elementToGroup = new Map<string, string>();
+    const sortedGroups = [...(output.groups ?? [])].sort((a, b) => (a.w * a.h) - (b.w * b.h));
 
-    // Node attribute lines (only for nodes whose label differs from id)
     for (const n of output.nodes ?? []) {
+        const parent = sortedGroups.find(g => groupContains(g, n.position));
+        if (parent) elementToGroup.set(n.id, parent.id);
+    }
+    for (const g of output.gates ?? []) {
+        const parent = sortedGroups.find(grp => groupContains(grp, g.position));
+        if (parent) elementToGroup.set(g.id, parent.id);
+    }
+
+    const printedNodes = new Set<string>();
+    const printedGates = new Set<string>();
+
+    const wiresByTarget = new Map<string, any[]>();
+    for (const w of output.wires ?? []) {
+        if (!wiresByTarget.has(w.toGate)) wiresByTarget.set(w.toGate, []);
+        wiresByTarget.get(w.toGate)!.push(w);
+    }
+
+    const formatNode = (n: GraphNode) => {
         const attrs: string[] = [];
         if (n.label && n.label !== n.id) attrs.push(`label="${n.label}"`);
-        if (attrs.length) lines.push(`${n.id} [${attrs.join(", ")}]`);
+        if (n.color) attrs.push(`color="${n.color}"`);
+        return attrs.length > 0 ? `${n.id} [${attrs.join(", ")}]` : `${n.id}`;
+    };
+
+    const formatGate = (g: CircuitGate) => {
+        const inWires = wiresByTarget.get(g.id) ?? [];
+        const inputs = inWires.map(w => w.fromGate);
+        const attrs: string[] = [];
+        if (g.label) attrs.push(`label="${g.label}"`);
+        if (g.color) attrs.push(`color="${g.color}"`);
+        if (g.type === "INPUT" && ((g as any).value ?? (g as any).active)) attrs.push(`active=true`);
+        
+        const attrStr = attrs.length > 0 ? ` [${attrs.join(", ")}]` : "";
+        if (g.type === "INPUT") return `${g.id} = INPUT${attrStr}`;
+        if (inputs.length > 0) return `${g.id} = ${g.type}(${inputs.join(", ")})${attrStr}`;
+        return `${g.id} = ${g.type}${attrStr}`;
+    };
+
+    // 2. Output frames and their nested contents
+    for (const grp of output.groups ?? []) {
+        const groupName = grp.label || grp.id;
+        lines.push(`group ${groupName}:`);
+        
+        for (const n of output.nodes ?? []) {
+            if (elementToGroup.get(n.id) === grp.id) {
+                lines.push(`  ${formatNode(n)}`);
+                printedNodes.add(n.id);
+            }
+        }
+        for (const g of output.gates ?? []) {
+            if (elementToGroup.get(g.id) === grp.id) {
+                lines.push(`  ${formatGate(g)}`);
+                printedGates.add(g.id);
+            }
+        }
+        
+        // ADD THIS: Inserts a blank line after the group to officially "close" it in text!
+        lines.push(""); 
     }
 
-    // =========================
-    // 2. EDGES (automaton)
-    // =========================
+    // 3. Output remaining Top-Level elements
+    for (const n of output.nodes ?? []) {
+        if (!printedNodes.has(n.id)) {
+            // Only print top-level nodes if they have specific attributes
+            const attrs: string[] = [];
+            if (n.label && n.label !== n.id) attrs.push(`label="${n.label}"`);
+            if (n.color) attrs.push(`color="${n.color}"`);
+            if (attrs.length > 0) lines.push(formatNode(n));
+            printedNodes.add(n.id);
+        }
+    }
+
+    for (const g of output.gates ?? []) {
+        if (!printedGates.has(g.id)) {
+            lines.push(formatGate(g));
+            printedGates.add(g.id);
+        }
+    }
+
+    // 4. Output Edges
     for (const e of output.edges ?? []) {
         let line = `${e.source} -> ${e.target}`;
         const hasLabel = !!e.label;
@@ -1155,48 +1149,6 @@ export function serializeToDSL(output: ParserOutput): string {
             }
         }
         lines.push(line);
-    }
-
-    // =========================
-    // 3. GATES + WIRES (function-call form)
-    // =========================
-    const wiresByTarget = new Map<string, any[]>();
-    for (const w of output.wires ?? []) {
-        if (!wiresByTarget.has(w.toGate)) wiresByTarget.set(w.toGate, []);
-        wiresByTarget.get(w.toGate)!.push(w);
-    }
-    for (const [, wires] of wiresByTarget) {
-        wires.sort((a, b) => (a.toPort ?? "").localeCompare(b.toPort ?? ""));
-    }
-
-    for (const g of output.gates ?? []) {
-        const inWires = wiresByTarget.get(g.id) ?? [];
-        const inputs = inWires.map(w => w.fromGate);
-        
-        // 1. Build the attributes array dynamically
-        const attrs: string[] = [];
-        if (g.label) attrs.push(`label="${g.label}"`);
-        
-        // 2. Check for the 'active' or 'value' state on INPUT gates
-        if (g.type === "INPUT") {
-            // SvgEditor uses 'value', Parser uses 'active', so we check both
-            const isActive = (g as any).value ?? (g as any).active;
-            if (isActive) {
-                attrs.push(`active=true`);
-            }
-        }
-
-        // 3. Format the attributes string
-        const attrStr = attrs.length > 0 ? ` [${attrs.join(", ")}]` : "";
-
-        // 4. Output the correct line
-        if (g.type === "INPUT") {
-            lines.push(`${g.id} = INPUT${attrStr}`);
-        } else if (inputs.length > 0) {
-            lines.push(`${g.id} = ${g.type}(${inputs.join(", ")})${attrStr}`);
-        } else {
-            lines.push(`${g.id} = ${g.type}${attrStr}`);
-        }
     }
 
     return lines.join("\n");
