@@ -1,229 +1,99 @@
-# In-Note Graph
+# Obsidian Automaton & Logic Designer (In-Graph)
 
-A powerful Obsidian plugin for creating and editing visual graphs and automatons directly within your notes.
+An interactive, high-performance visual editor for **Finite State Machines (FSM)** and **Logic Circuits** built directly into Obsidian. Create, simulate, and document computation models using a simple, human-readable DSL (Domain Specific Language) that renders into a highly interactive SVG canvas.
 
-## Overview
+---
 
-In-Note Graph is a visual editor plugin for [Obsidian](https://obsidian.md/) that enables you to design and visualize:
+## 🚀 Key Features
 
-- **Graphs**: Create directed graphs with nodes and edges
-- **Automatons**: Design state machines and finite automatons
-- **Circuits**: Build and simulate digital logic circuits
-- **Custom Themes**: Apply custom styling to your visualizations
-- **Real-time Editing**: Edit your diagrams directly in your notes with instant preview
+### 🧠 Finite Automata (DFA/NFA/PDA)
+- **MathJax Auto-Sizing:** Type complex LaTeX (e.g., `$\{q_0, q_1, q_2\}$`) and watch the state nodes mathematically calculate the exact physical bounding box of the rendered equation to perfectly resize themselves.
+- **Interactive Graphing:** Smooth drag-and-drop interface for states and transitions.
+- **Automata Essentials:** Toggle **Start States** (incoming arrow) and **Accept States** (double-circle) with a simple right-click.
+- **Smart Pathing:** Support for straight lines, automatic 2-way curves, and manual Bezier waypoints for complex layouts.
+- **DOT Import:** Instant migration from **Graphviz/DOT** files via a dedicated import modal.
 
-## Features
+### 🔌 Logic Circuit Designer & Simulator
+- **Live Simulation:** Build circuits and click `INPUT` nodes to toggle their states. Watch the signals propagate through the wires with animated, glowing electricity.
+- **Gate Library:** Integrated support for standard IEEE schematic gates: `AND`, `OR`, `NOT`, `XOR`, `NAND`, `NOR`, `XNOR`.
+- **Truth Table Generator:** Right-click any circuit to instantly generate and copy a complete Truth Table based on your inputs and outputs.
+- **Orthogonal (Manhattan) Routing:** Toggle "Straight Wires" in the settings to automatically route wires using clean, 90-degree stair-step angles.
 
-### 📊 Graph Editor
-- Create nodes and edges with a visual interface
-- Support for node labels and customizable positioning
-- Automatic rendering within markdown code blocks
+### 🛠️ Pro Editor Tools
+- **Real-Time Snippet Expander:** A built-in, regex-powered text expander (inspired by Latex Suite) that automatically converts triggers like `//` into `\frac{}{}`, auto-closes brackets, and handles complex MathJax on the fly.
+- **Figma-Style Frames:** Group elements into beautiful, interactive frames. Dragging a frame automatically "scoops up" and moves all nodes, gates, and waypoints inside it (hold `Shift` while dragging to move just the frame).
+- **Alignment & Distribution:** A full toolbar to align nodes (Left, Center, Right, Top, Bottom) and evenly distribute them across the canvas.
+- **Batch Saving & Obsidian Native:** Optimized "Capture-Phase" saving to prevent file-write conflicts. Fully responsive to Obsidian's Dark/Light modes and custom theme accents.
 
-### 🤖 Automaton Support
-- Design finite state automatons
-- Configure states and transitions
-- Visual representation of state machines
+---
 
-### ⚡ Circuit Simulation
-- Create digital logic circuits with gates and wires
-- Support for various circuit components
-- Integrated circuit simulator
+## 🛠️ Usage
 
-### 🎨 Theming System
-- Customize appearance of your diagrams
-- Pre-configured theme presets
-- Individual theme customization per diagram
+Wrap your graph data in an `in-graph` code block. You can open the DSL editor by clicking the background of the graph or pressing `Ctrl + Shift + G`.
 
-### 📐 Advanced Features
-- Viewport management and zoom controls
-- Group nodes for organizing complex diagrams
-- Embedded SVG rendering
-- MathJax support for mathematical notation
-- Multi-note management with automatic saving
+### Example: Automaton
+```text
+start: q0
+accept: q2
+q0 [label="$\{q_0\}$"]
+q1 [label="$\{q_0,q_1\}$"]
+q2 [label="$\{q_2\}$"]
 
-## Installation
-
-1. Open Obsidian Settings → Community plugins → Browse
-2. Search for "In-Note Graph"
-3. Click Install
-4. Enable the plugin
-
-## Usage
-
-### Creating a Graph
-
-Use the `in-graph` code block in your markdown:
-
-````markdown
-```in-graph
-{
-  "nodes": [
-    { "id": "q0", "position": { "x": 150, "y": 250 }, "label": "q0" },
-    { "id": "q1", "position": { "x": 350, "y": 250 }, "label": "q1" }
-  ],
-  "edges": [
-    { "from": "q0", "to": "q1", "label": "a" }
-  ],
-  "theme": "default",
-  "viewport": { "x": 0, "y": 0, "zoom": 1 }
-}
-```
-````
-
-### Graph JSON Structure
-
-```json
-{
-  "nodes": [
-    {
-      "id": "unique_id",
-      "position": { "x": 100, "y": 100 },
-      "label": "Node Label",
-      "isStart": true,
-      "isAccepting": false
-    }
-  ],
-  "edges": [
-    {
-      "id": "unique_id",
-      "source": "source_node_id",
-      "target": "target_node_id",
-      "type": "arrow/none",
-      "label": "Edge Label",
-      "isBendable": false,
-      "waypoints": [
-        {
-            "id": "unique_id",
-            "x": 100,
-            "y": 100,
-            "type": "bezier/linear"
-        }
-      ]
-    }
-  ],
-  "gates": [
-    {
-      "id": "unique_id",
-      "type": "INPUT/OUTPUT/AND/OR/NOT/NAND/NOR/XOR/XNOR",
-      "position": { "x": 100, "y": 100 },
-      "label": "Gate Label"
-    }
-  ],
-  "wires": [
-    {
-      "id": "unique_id",
-      "fromGate": "source_gate_id",
-      "fromPort": "out_port_name",
-      "toGate": "target_gate_id",
-      "toPort": "in_port_name",
-      "isBendable": false,
-      "waypoints": [
-        {
-            "id": "unique_id",
-            "x": 100,
-            "y": 100,
-            "type": "bezier/linear"
-        }
-      ]
-    }
-  ],
-  "groups": [
-    {
-      "id": "unique_id",
-      "label": "Group Label",
-      "x": 100,
-      "y": 100,
-      "w": 100,
-      "h": 100
-    }
-  ],
-  "theme": {},
-  "viewport": { "x": 0, "y": 0, "zoom": 1 }
-}
+q0 -> q1 : a
+q0 -> q2 : b
+q1 -> q2 : a, b
+q2 -> q2 : a, b [via 200,150b; 250,150b]
 ```
 
-## Settings
+### Example: Logic Circuit
+```text
+group Inputs:
+  A = INPUT [label="Switch A"]
+  B = INPUT [active=true]
 
-Access plugin settings via Obsidian Settings → In-Note Graph:
-
-- Theme preferences
-- Editor options
-- Default viewport settings
-- Diagram styling options
-
-## Technical Details
-
-- **Built with**: TypeScript, React, SVG
-- **Minimum Obsidian version**: 0.10.8
-- **Desktop only**: This plugin is currently available for desktop versions only
-
-### Project Structure
-
-```
-src/
-├── index.ts                 # Main plugin entry point
-├── models/
-│   ├── automaton.ts        # Automaton model definitions
-│   ├── circuits.ts         # Circuit component models
-│   ├── graph.ts            # Graph data structures
-│   ├── settings.ts         # Plugin settings
-│   └── theme.ts            # Theme configuration
-├── services/
-│   └── circuitSimulator.ts  # Circuit simulation logic
-└── ui/
-    ├── settings.ts         # Settings UI
-    └── SvgEditor.ts        # Visual SVG editor
+C = AND(A, B)
+D = NOT(C)
+OUT = OUTPUT(D)
 ```
 
-## Development
+---
 
-### Setup
+## ⌨️ Interaction Guide
 
-```bash
-npm install
-```
+| Action | Method |
+| :--- | :--- |
+| **Toggle DSL Editor** | `Ctrl + Shift + G` |
+| **Apply DSL Code** | `Ctrl + Shift + Enter` |
+| **Save Graph** | `Ctrl + S` |
+| **Add State/Gate** | Right-click Canvas → `Add state here` / `Add gate` |
+| **Link Nodes** | Hover over node → Click the `+` button → Click target node |
+| **Edit Label** | Double-click any Node or Edge |
+| **Bend Wires** | Hover edge → Drag orange/blue waypoint dots |
+| **Frame Selection** | Drag a frame to move contents. Hold `Shift` to move just the frame. |
+| **Zoom / Pan** | Mouse Wheel / Alt + Drag (or Middle-click) |
 
-### Build
+---
 
-```bash
-# Development build
-npm run dev
+## 🎨 Theming & Customization
 
-# Production build
-npm run build
+Go to **Settings → Automaton & Logic Designer** to heavily customize your experience:
+- **Theme Presets:** Choose from built-in themes or customize individual token colors (Canvas, Nodes, Edges, Active Wires, Frames).
+- **Custom Snippets:** Load your own `snippets.js` file from your vault to define custom regex text-expansion rules for the DSL editor.
+- **Routing & Behaviors:** Toggle orthogonal wire routing, default undo history limits, and default canvas heights.
 
-# Production build without linting
-npm run build:nolint
-```
+---
 
-### Linting
+## 📂 Installation
 
-```bash
-npm run lint
-```
+*Note: This plugin is currently in manual installation phase.*
 
-### Testing
+1. Navigate to your vault's plugin folder: `.obsidian/plugins/`.
+2. Create a folder named `obsidian-in-graph`.
+3. Drop `main.js`, `manifest.json`, and `styles.css` into the folder.
+4. Restart Obsidian and enable the plugin in **Community Plugins**.
 
-```bash
-# Run tests
-npm run test
+---
 
-# Watch mode
-npm run test:watch
-```
+## 🎓 Academic Use
 
-## License
-
-MIT License - See [LICENSE](LICENSE) file for details
-
-## Author
-
-ShakedKod
-
-## Support
-
-For issues, questions, or feature requests, please refer to the plugin repository.
-
-## Version
-
-Current version: 0.1.0
+This plugin was engineered specifically to assist Computer Science students in creating clean, professional, and mathematically accurate diagrams for Theory of Computation, Automata, and Digital Systems courses. Because the graphs exist natively inside Obsidian, they are perfect for open-book exams, homework submissions, and heavily mathematical study vaults.

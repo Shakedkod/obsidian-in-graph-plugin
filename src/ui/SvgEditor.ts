@@ -624,7 +624,7 @@ export class SvgGraphEditor {
         pill.addClass("automaton-label-pill");
         pill.style.color = color;
 
-        text.split(/(\$.*?\$)/g).forEach(part => {
+        text.split(/((?<!\\)\$.*?(?<!\\)\$)/g).forEach(part => {
             if (part.startsWith("$") && part.endsWith("$")) {
                 try {
                     const mathEl = renderMath(part.slice(1, -1), false);
