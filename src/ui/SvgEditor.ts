@@ -97,6 +97,7 @@ export class SvgGraphEditor {
 
     constructor(
         container: HTMLElement,
+        initialId: string,
         initialNodes: GraphNode[],
         initialEdges: GraphEdge[],
         initialGates: CircuitGate[] = [],
@@ -116,6 +117,7 @@ export class SvgGraphEditor {
         const initHeight = initialViewport?.height ? Math.max(100, initialViewport.height) : 300;
         this.container.style.height = `${initHeight}px`;
 
+        this.graphId = initialId;
         this.nodes = initialNodes;
         this.edges = initialEdges;
         this.gates = initialGates;
@@ -227,20 +229,25 @@ export class SvgGraphEditor {
         const savedViewBox = this.clampViewBoxToContent({ ...this.viewBox });
         const currentViewport: GraphViewport = { height: h, viewBox: savedViewBox };
 
+        // Always update the record with latest state so the file writer
+        // always has fresh data regardless of forceFileWrite.
+        this.onSave(
+            this.nodes,
+            this.edges,
+            this.graphId,
+            this.theme,
+            currentViewport,
+            this.gates,
+            this.wires,
+            this.groups
+        );
+
         if (forceFileWrite) {
-            this.onSave(
-                this.nodes,
-                this.edges,
-                this.graphId,
-                this.theme,
-                currentViewport,
-                this.gates,
-                this.wires,
-                this.groups
-            );
             this.unsavedDot.style.opacity = "0";
         } else {
             this.unsavedDot.style.opacity = "1";
+            // Schedule the debounced file write for every non-forced change.
+            this.onManualSave();
         }
 
         this.onGraphChanged();

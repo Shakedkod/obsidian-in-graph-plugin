@@ -81,6 +81,11 @@
     flex-shrink: 0;
 }
 
+[dir="rtl"] .automaton-toolbar
+{
+    justify-content: flex-end;
+}
+
 .automaton-toolbar-btn
 {
     display: flex;

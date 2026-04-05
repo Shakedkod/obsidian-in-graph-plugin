@@ -10,6 +10,10 @@ import { initSnippets } from "./services/LatexSnippets";
 
 interface GraphRecord {
     graphId: string;
+    sourcePath: string;
+    // Set for new blocks (no id in file yet). Used by spliceGraphIntoContent to
+    // locate the block by content on the first save, then cleared immediately.
+    pendingSource: string | undefined;
     nodes: GraphNode[];
     edges: GraphEdge[];
     gates: CircuitGate[];
@@ -17,23 +21,31 @@ interface GraphRecord {
     groups: GraphGroup[];
     theme: GraphTheme | undefined;
     viewport: GraphViewport | undefined;
-    lineStart: number;
-    linePrefix: string;
     editor?: SvgGraphEditor;
+    // Per-graph debounce timer
+    saveTimeout: ReturnType<typeof setTimeout> | null;
+    // True while a vault.process call is in flight for this graph.
+    // If new changes arrive during a save, dirtyWhileSaving is set so
+    // saveRecordToFile re-runs immediately after the current save finishes.
+    isSaving: boolean;
+    dirtyWhileSaving: boolean;
 }
 
 export default class InGraphPlugin extends Plugin {
     settings!: InGraphPluginSettings;
 
     private activeGraphs = new Map<string, GraphRecord>();
-    private saveTimeout: ReturnType<typeof setTimeout> | null = null;
     private lastMousePos = { x: 0, y: 0 };
+    private statusBarItem!: HTMLElement;
+    private statusBarClearTimeout: ReturnType<typeof setTimeout> | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
         await loadMathJax();
 
         this.addSettingTab(new InGraphSettingTab(this.app, this));
+        this.statusBarItem = this.addStatusBarItem();
+        this.statusBarItem.setText("");
 
         window.addEventListener("mousemove", (e) => {
             this.lastMousePos = { x: e.clientX, y: e.clientY };
@@ -45,15 +57,9 @@ export default class InGraphPlugin extends Plugin {
             callback: () => {
                 const record = this.getClosestGraph();
                 if (!record?.editor) return;
-
                 record.editor.toggleWritingMode();
             },
-            hotkeys: [
-                {
-                    modifiers: ["Mod", "Shift"],
-                    key: "G"
-                }
-            ]
+            hotkeys: [{ modifiers: ["Mod", "Shift"], key: "G" }]
         });
 
         this.addCommand({
@@ -62,34 +68,32 @@ export default class InGraphPlugin extends Plugin {
             callback: () => {
                 const record = this.getClosestGraph();
                 if (!record?.editor) return;
-
                 record.editor.applyOpenDslText();
             },
-            hotkeys: [
-                {
-                    modifiers: ["Mod", "Shift"],
-                    key: "Enter"
-                }
-            ]
+            hotkeys: [{ modifiers: ["Mod", "Shift"], key: "Enter" }]
         });
 
         this.registerMarkdownCodeBlockProcessor("in-graph", async (source, el, ctx) => {
             const sectionInfo = ctx.getSectionInfo(el);
-            const blockId = sectionInfo?.lineStart.toString() || Math.random().toString();
+            const blockId = sectionInfo?.lineStart.toString() ?? Math.random().toString();
 
             let id = `graph-${Math.random().toString(36).substr(2, 9)}`;
-            let nodes = [];
-            let edges = [];
-            let theme = undefined;
-            let viewport = undefined;
-
+            let nodes: GraphNode[] = [];
+            let edges: GraphEdge[] = [];
+            let theme: GraphTheme | undefined = undefined;
+            let viewport: GraphViewport | undefined = undefined;
             let gates: CircuitGate[] = [];
             let wires: CircuitWire[] = [];
             let groups: GraphGroup[] = [];
 
+            let isNewBlock = false;
             try {
                 const data = JSON.parse(source);
-                id = data.id || id;
+                if (data.id) {
+                    id = data.id;
+                } else {
+                    isNewBlock = true;
+                }
                 nodes = data.nodes || [];
                 edges = data.edges || [];
                 gates = data.gates || [];
@@ -97,68 +101,47 @@ export default class InGraphPlugin extends Plugin {
                 groups = data.groups || [];
                 theme = data.theme;
                 viewport = data.viewport;
-            } catch (e) {
+            } catch {
+                // Empty or invalid JSON — new block
+                isNewBlock = true;
                 nodes = [{ id: "q0", position: { x: 150, y: 250 }, label: "q0" }];
                 edges = [];
             }
 
-            // Find the true absolute line numbers by scanning the raw file.
-            // getSectionInfo().lineStart is unreliable inside callouts (it's section-relative).
-            // Instead we read the file, find every in-graph fence, and match by content.
-            let linePrefix = "";
-            let lineStart = -1;
-
-            const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-            if (file instanceof TFile) {
-                const rawContent = await this.app.vault.read(file);
-                const rawLines = rawContent.split("\n");
-
-                // Find all opening fences for in-graph blocks
-                for (let i = 0; i < rawLines.length; i++) {
-                    const stripped = rawLines[i].replace(/^((?:>\s*)*)/, "");
-                    if (!/^```in-graph\s*$/.test(stripped)) continue;
-
-                    // Found a fence — now collect all content lines until closing fence
-                    const candidatePrefix = rawLines[i].match(/^((?:>\s*)*)/)?.[1] ?? "";
-                    const contentLines: string[] = [];
-                    let closeI = -1;
-                    for (let j = i + 1; j < rawLines.length; j++) {
-                        const strippedJ = rawLines[j].startsWith(candidatePrefix)
-                            ? rawLines[j].slice(candidatePrefix.length)
-                            : rawLines[j];
-                        if (/^```\s*$/.test(strippedJ)) {
-                            closeI = j;
-                            break;
-                        }
-                        // Strip the callout prefix to get the raw content
-                        contentLines.push(strippedJ);
-                    }
-                    if (closeI === -1) continue;
-
-                    // Compare against the source Obsidian gave us (trim to be safe)
-                    const candidate = contentLines.join("\n").trim();
-                    if (candidate === source.trim()) {
-                        lineStart = i;
-                        linePrefix = candidatePrefix;
-                        break;
-                    }
-                }
-            }
-
-            if (lineStart === -1) {
-                // Fallback: shouldn't normally happen
-                console.warn("[in-graph] Could not locate block in raw file, saving disabled for this block");
-            }
-
             const resolvedTheme = this.getResolvedTheme(theme);
 
-            const record: GraphRecord = { nodes, edges, gates, wires, groups, theme, viewport, lineStart, linePrefix, graphId: id };
+            const record: GraphRecord = {
+                graphId: id,
+                sourcePath: ctx.sourcePath,
+                // For new blocks we store the raw source so spliceGraphIntoContent
+                // can find the block by content on the FIRST save, then clear it.
+                pendingSource: isNewBlock ? source : undefined,
+                nodes,
+                edges,
+                gates,
+                wires,
+                groups,
+                theme,
+                viewport,
+                saveTimeout: null,
+                isSaving: false,
+                dirtyWhileSaving: false,
+            };
             this.activeGraphs.set(blockId, record);
 
-            const onSave = async (savedNodes: GraphNode[], savedEdges: GraphEdge[], id: string, _savedTheme?: GraphTheme,
-                savedViewport?: GraphViewport, savedGates?: CircuitGate[], savedWires?: CircuitWire[],
-                savedGroups?: GraphGroup[]) => {
-                record.graphId = id;
+            // Called by the editor whenever state changes — must be synchronous
+            // because SvgEditor calls it without await.
+            const onSave = (
+                savedNodes: GraphNode[],
+                savedEdges: GraphEdge[],
+                savedId: string,
+                _savedTheme?: GraphTheme,
+                savedViewport?: GraphViewport,
+                savedGates?: CircuitGate[],
+                savedWires?: CircuitWire[],
+                savedGroups?: GraphGroup[]
+            ) => {
+                record.graphId = savedId;
                 record.nodes = savedNodes;
                 record.edges = savedEdges;
                 record.gates = savedGates ?? record.gates;
@@ -167,12 +150,14 @@ export default class InGraphPlugin extends Plugin {
                 record.viewport = savedViewport;
             };
 
+            const triggerSave = () => this.scheduleSaveForRecord(record);
+
             const editor = new SvgGraphEditor(
-                el, nodes, edges, gates, wires,
+                el, id, nodes, edges, gates, wires,
                 groups, viewport,
                 resolvedTheme,
                 onSave,
-                () => this.batchSaveToFile(),
+                triggerSave,
                 this.settings.dslMode ?? "bottom",
                 this.settings.clickBgOpensDsl ?? false,
                 this.settings.straightWires ?? false
@@ -180,21 +165,162 @@ export default class InGraphPlugin extends Plugin {
             record.editor = editor;
 
             const listenerComponent = new MarkdownRenderChild(el);
+
             const handleKeyDown = (e: KeyboardEvent) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === "s") {
                     editor.forceSave();
-                    this.batchSaveToFile();
+                    if (record.saveTimeout) {
+                        clearTimeout(record.saveTimeout);
+                        record.saveTimeout = null;
+                    }
+                    this.saveRecordToFile(record);
                 }
             };
 
+            // Save when focus leaves the graph entirely.
+            // focusout bubbles (unlike blur), so it fires when any child loses focus.
+            // We check relatedTarget to ensure focus moved outside the container,
+            // not just between two elements inside it (e.g. clicking a toolbar button).
+            const handleFocusOut = (e: FocusEvent) => {
+                const relatedTarget = e.relatedTarget as Node | null;
+                if (!el.contains(relatedTarget)) {
+                    editor.forceSave();
+                    this.scheduleSaveForRecord(record);
+                }
+            };
+
+            el.addEventListener("focusout", handleFocusOut);
             window.addEventListener("keydown", handleKeyDown, { capture: true });
+
             listenerComponent.unload = () => {
+                el.removeEventListener("focusout", handleFocusOut);
                 window.removeEventListener("keydown", handleKeyDown, { capture: true });
+                if (record.saveTimeout) clearTimeout(record.saveTimeout);
                 editor.destroy();
                 this.activeGraphs.delete(blockId);
             };
             ctx.addChild(listenerComponent);
         });
+    }
+
+    /**
+     * Schedules a debounced save for a single graph record.
+     * Each graph has its own timer so they never interfere with each other.
+     */
+    private scheduleSaveForRecord(record: GraphRecord, delayMs = 500) {
+        if (record.saveTimeout) clearTimeout(record.saveTimeout);
+        record.saveTimeout = setTimeout(() => {
+            record.saveTimeout = null;
+            this.saveRecordToFile(record);
+        }, delayMs);
+    }
+
+    /**
+     * Saves a single graph back into its source file.
+     *
+     * Strategy: locate the block by scanning for the graphId inside each in-graph
+     * fence at save-time. This means we never rely on stale line numbers — the
+     * block is always found correctly even after edits above it or inside callouts.
+     */
+    private async saveRecordToFile(record: GraphRecord): Promise<void> {
+        if (record.isSaving) {
+            record.dirtyWhileSaving = true;
+            return;
+        }
+        record.isSaving = true;
+        record.dirtyWhileSaving = false;
+
+        try {
+            const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
+            if (!(file instanceof TFile)) return;
+
+            const newJson = JSON.stringify({
+                id: record.graphId,
+                nodes: record.nodes,
+                edges: record.edges,
+                gates: record.gates?.length ? record.gates : undefined,
+                wires: record.wires?.length ? record.wires : undefined,
+                groups: record.groups?.length ? record.groups : undefined,
+                theme: record.theme,
+                viewport: record.viewport,
+            }, null, 2);
+
+            await this.app.vault.process(file, (data) => {
+                return this.spliceGraphIntoContent(data, record.graphId, newJson, record.pendingSource);
+            });
+
+            record.pendingSource = undefined;
+            this.showSaveStatus();
+        } catch (err) {
+            console.error(`[in-graph] Failed to save graph "${record.graphId}"`, err);
+        } finally {
+            record.isSaving = false;
+            if (record.dirtyWhileSaving) {
+                record.dirtyWhileSaving = false;
+                this.saveRecordToFile(record);
+            }
+        }
+    }
+
+    private spliceGraphIntoContent(data: string, graphId: string, newJson: string, pendingSource?: string): string {
+        const lines = data.split("\n");
+        const trimmedPending = pendingSource?.trim();
+
+        for (let i = 0; i < lines.length; i++) {
+            const fenceMatch = lines[i].match(/^((?:>\s*)*)```in-graph\s*$/);
+            if (!fenceMatch) continue;
+
+            const prefix = fenceMatch[1];
+            const contentLines: string[] = [];
+            let closeIdx = -1;
+
+            for (let j = i + 1; j < lines.length; j++) {
+                const stripped = lines[j].startsWith(prefix)
+                    ? lines[j].slice(prefix.length)
+                    : lines[j];
+
+                if (/^```\s*$/.test(stripped)) { closeIdx = j; break; }
+                if (/^```\w/.test(stripped)) break;
+                contentLines.push(stripped);
+            }
+
+            if (closeIdx === -1) continue;
+
+            const blockSource = contentLines.join("\n").trim();
+
+            let blockId: string | undefined;
+            try { blockId = JSON.parse(blockSource)?.id; } catch { /* skip */ }
+
+            const isIdMatch = blockId === graphId;
+            const isNewBlockMatch = !isIdMatch
+                && trimmedPending !== undefined
+                && blockSource === trimmedPending
+                && !blockId;
+
+            if (!isIdMatch && !isNewBlockMatch) continue;
+
+            const newContentLines = newJson.split("\n").map(l => `${prefix}${l}`);
+            lines.splice(i + 1, closeIdx - i - 1, ...newContentLines);
+            break;
+        }
+
+        return lines.join("\n");
+    }
+
+    /**
+     * Updates the status bar with a save confirmation that auto-clears after 2s.
+     * Multiple rapid saves collapse into one message rather than spamming the console.
+     */
+    private showSaveStatus() {
+        const now = new Date();
+        const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        this.statusBarItem.setText(`✓ in-graph saved · ${time}`);
+
+        if (this.statusBarClearTimeout) clearTimeout(this.statusBarClearTimeout);
+        this.statusBarClearTimeout = setTimeout(() => {
+            this.statusBarItem.setText("");
+            this.statusBarClearTimeout = null;
+        }, 2000);
     }
 
     private getClosestGraph(): GraphRecord | null {
@@ -205,8 +331,6 @@ export default class InGraphPlugin extends Plugin {
             if (!record.editor) continue;
 
             const rect = record.editor.container.getBoundingClientRect();
-
-            // Distance from mouse to rectangle (0 if inside)
             const dx = Math.max(rect.left - this.lastMousePos.x, 0, this.lastMousePos.x - rect.right);
             const dy = Math.max(rect.top - this.lastMousePos.y, 0, this.lastMousePos.y - rect.bottom);
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -226,96 +350,6 @@ export default class InGraphPlugin extends Plugin {
         }
         const preset = THEME_PRESETS.find(p => p.name === this.settings.activeTheme);
         return { ...(preset?.theme ?? {}), ...blockThemeOverride };
-    }
-
-    private batchSaveToFile() {
-        if (this.saveTimeout) clearTimeout(this.saveTimeout);
-
-        this.saveTimeout = setTimeout(async () => {
-            const file = this.app.workspace.getActiveFile();
-            if (!file || this.activeGraphs.size === 0) return;
-
-            await this.app.vault.process(file, (data) => {
-                const lines = data.split("\n");
-
-                // Sort records top-to-bottom so line offsets are applied in order
-                const records = [...this.activeGraphs.values()]
-                    .filter(r => r.lineStart >= 0)
-                    .sort((a, b) => a.lineStart - b.lineStart);
-
-                let lineOffset = 0; 
-                
-                // ADDED: A Set to remember which graph IDs we have already saved!
-                const processedIds = new Set<string>();
-
-                for (const record of records) {
-                    if (!record.graphId)
-                    {
-                        // create a new ID if missing (shouldn't normally happen, but just in case)
-                        record.graphId = `graph-${Math.random().toString(36).substr(2, 9)}`;
-                    }
-
-                    if (processedIds.has(record.graphId)) {
-                        continue;
-                    }
-                    processedIds.add(record.graphId); // Mark as processed
-
-                    const absOpen = record.lineStart + lineOffset;
-                    const p = record.linePrefix;
-
-                    // Sanity check: the line must still be our opening fence
-                    const openLine = lines[absOpen] ?? "";
-                    const openStripped = openLine.startsWith(p) ? openLine.slice(p.length) : openLine;
-                    if (!/^```in-graph\s*$/.test(openStripped)) {
-                        console.warn(`[in-graph] Fence not found at line ${absOpen} (got: "${openLine}"), skipping`);
-                        continue;
-                    }
-
-                    // Find the closing fence — must have exactly the same prefix
-                    let closeIdx = -1;
-                    for (let i = absOpen + 1; i < lines.length; i++) {
-                        const s = lines[i].startsWith(p) ? lines[i].slice(p.length) : lines[i];
-                        if (/^```\s*$/.test(s)) {
-                            closeIdx = i;
-                            break;
-                        }
-                        // Stop if we hit another opening fence (malformed doc guard)
-                        if (/^```\w/.test(s)) break;
-                    }
-
-                    if (closeIdx === -1) {
-                        console.warn(`[in-graph] No closing fence for block at line ${absOpen}`);
-                        continue;
-                    }
-
-                    const newJson = JSON.stringify({
-                        id: record.graphId,
-                        nodes: record.nodes,
-                        edges: record.edges,
-                        gates: record.gates?.length ? record.gates : undefined,
-                        wires: record.wires?.length ? record.wires : undefined,
-                        groups: record.groups?.length ? record.groups : undefined,
-                        theme: record.theme,
-                        viewport: record.viewport
-                    }, null, 2);
-
-                    const newContentLines = newJson.split("\n").map(l => `${p}${l}`);
-                    const oldCount = closeIdx - absOpen - 1;
-                    const newCount = newContentLines.length;
-
-                    lines.splice(absOpen + 1, oldCount, ...newContentLines);
-
-                    lineOffset += newCount - oldCount;
-                }
-
-                return lines.join("\n");
-            });
-
-            // Deduplicate the console log count to show the true number of unique saves
-            const uniqueGraphCount = new Set([...this.activeGraphs.values()].map(r => r.graphId)).size;
-            console.log(`Saved ${uniqueGraphCount} graphs.`);
-            
-        }, 50);
     }
 
     async loadSettings(): Promise<void> {
@@ -338,7 +372,7 @@ export default class InGraphPlugin extends Plugin {
     async loadCustomSnippets() {
         const path = this.settings.snippetsPath;
         if (!path) {
-            initSnippets(); // Load defaults
+            initSnippets();
             return;
         }
 
@@ -346,9 +380,7 @@ export default class InGraphPlugin extends Plugin {
         if (file instanceof TFile) {
             try {
                 const content = await this.app.vault.read(file);
-                // Evaluate the JS content to allow regex literals and arrow functions
                 const parsed = new Function(`return ${content};`)();
-                
                 if (Array.isArray(parsed)) {
                     initSnippets(parsed);
                     console.log(`Loaded ${parsed.length} custom snippets from ${path}`);
