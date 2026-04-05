@@ -51,3 +51,12 @@ export interface GraphGroup
     h: number;
     color?: string;
 }
+
+export interface FloatingLabel {
+    id: string;
+    x: number;
+    y: number;
+    text: string;
+    width?: number;    // defaults to 160
+    fontSize?: number; // defaults to 14
+}

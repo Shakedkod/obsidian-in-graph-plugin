@@ -1,6 +1,6 @@
 import { loadMathJax, MarkdownRenderChild, Plugin, TFile } from "obsidian";
 import { SvgGraphEditor } from "./ui/SvgEditor";
-import { GraphEdge, GraphGroup, GraphNode, GraphViewport } from "./models/graph";
+import { FloatingLabel, GraphEdge, GraphGroup, GraphNode, GraphViewport } from "./models/graph";
 import { GraphTheme, THEME_PRESETS } from "./models/theme";
 import { InGraphPluginSettings } from "./models/settings";
 import { DEFAULT_SETTINGS } from "./models/settings";
@@ -19,6 +19,7 @@ interface GraphRecord {
     gates: CircuitGate[];
     wires: CircuitWire[];
     groups: GraphGroup[];
+    floatingLabels: FloatingLabel[];
     theme: GraphTheme | undefined;
     viewport: GraphViewport | undefined;
     editor?: SvgGraphEditor;
@@ -85,6 +86,7 @@ export default class InGraphPlugin extends Plugin {
             let gates: CircuitGate[] = [];
             let wires: CircuitWire[] = [];
             let groups: GraphGroup[] = [];
+            let floatingLabels: FloatingLabel[] = [];
 
             let isNewBlock = false;
             try {
@@ -99,12 +101,13 @@ export default class InGraphPlugin extends Plugin {
                 gates = data.gates || [];
                 wires = data.wires || [];
                 groups = data.groups || [];
+                floatingLabels = data.floatingLabels || [];
                 theme = data.theme;
                 viewport = data.viewport;
             } catch {
                 // Empty or invalid JSON — new block
                 isNewBlock = true;
-                nodes = [{ id: "q0", position: { x: 150, y: 250 }, label: "q0" }];
+                nodes = [];
                 edges = [];
             }
 
@@ -123,6 +126,7 @@ export default class InGraphPlugin extends Plugin {
                 groups,
                 theme,
                 viewport,
+                floatingLabels,
                 saveTimeout: null,
                 isSaving: false,
                 dirtyWhileSaving: false,
@@ -139,7 +143,8 @@ export default class InGraphPlugin extends Plugin {
                 savedViewport?: GraphViewport,
                 savedGates?: CircuitGate[],
                 savedWires?: CircuitWire[],
-                savedGroups?: GraphGroup[]
+                savedGroups?: GraphGroup[],
+                savedFloatingLabels?: FloatingLabel[],
             ) => {
                 record.graphId = savedId;
                 record.nodes = savedNodes;
@@ -147,6 +152,7 @@ export default class InGraphPlugin extends Plugin {
                 record.gates = savedGates ?? record.gates;
                 record.wires = savedWires ?? record.wires;
                 record.groups = savedGroups ?? record.groups;
+                record.floatingLabels = savedFloatingLabels ?? record.floatingLabels;
                 record.viewport = savedViewport;
             };
 
@@ -154,7 +160,7 @@ export default class InGraphPlugin extends Plugin {
 
             const editor = new SvgGraphEditor(
                 el, id, nodes, edges, gates, wires,
-                groups, viewport,
+                groups, floatingLabels, viewport,
                 resolvedTheme,
                 onSave,
                 triggerSave,
@@ -243,6 +249,7 @@ export default class InGraphPlugin extends Plugin {
                 groups: record.groups?.length ? record.groups : undefined,
                 theme: record.theme,
                 viewport: record.viewport,
+                floatingLabels: record.floatingLabels,
             }, null, 2);
 
             await this.app.vault.process(file, (data) => {

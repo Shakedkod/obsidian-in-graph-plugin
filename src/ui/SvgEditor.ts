@@ -1,5 +1,5 @@
 import { finishRenderMath, renderMath } from "obsidian";
-import { GraphEdge, GraphGroup, GraphNode, GraphViewport, Position } from "../models/graph";
+import { FloatingLabel, GraphEdge, GraphGroup, GraphNode, GraphViewport, Position } from "../models/graph";
 import { DEFAULT_THEME, GraphTheme } from "../models/theme";
 import { CircuitGate, CircuitWire, GATE_SIZE, GateType } from "../models/circuits";
 import { CircuitSimulator, getPortPositions } from "../services/circuitSimulator";
@@ -89,10 +89,15 @@ export class SvgGraphEditor {
     private clickBgOpensDsl = false;
     private straightWires = false;
 
+    // Floating labels
+    floatingLabels: FloatingLabel[] = [];
+    private floatingLabelElements: Map<string, SVGForeignObjectElement> = new Map();
+    private draggedFloatingLabel: FloatingLabel | null = null;
+
     // Tracks DOM observers to prevent memory leaks
     private resizeObservers: ResizeObserver[] = [];
 
-    private onSave: (nodes: GraphNode[], edges: GraphEdge[], id: string, theme?: GraphTheme, viewport?: GraphViewport, gates?: CircuitGate[], wires?: CircuitWire[], groups?: GraphGroup[]) => void;
+    private onSave: (nodes: GraphNode[], edges: GraphEdge[], id: string, theme?: GraphTheme, viewport?: GraphViewport, gates?: CircuitGate[], wires?: CircuitWire[], groups?: GraphGroup[], floatingLabels?: FloatingLabel[]) => void;
     private onManualSave: () => void;
 
     constructor(
@@ -103,9 +108,10 @@ export class SvgGraphEditor {
         initialGates: CircuitGate[] = [],
         initialWires: CircuitWire[] = [],
         initialGroups: GraphGroup[] = [],
+        initialFloatingLabels: FloatingLabel[] = [],
         initialViewport: GraphViewport | undefined,
         userTheme: GraphTheme | undefined,
-        onSave: (nodes: GraphNode[], edges: GraphEdge[], id: string, theme?: GraphTheme, viewport?: GraphViewport, gates?: CircuitGate[], wires?: CircuitWire[], groups?: GraphGroup[]) => void,
+        onSave: (nodes: GraphNode[], edges: GraphEdge[], id: string, theme?: GraphTheme, viewport?: GraphViewport, gates?: CircuitGate[], wires?: CircuitWire[], groups?: GraphGroup[], floatingLabels?: FloatingLabel[]) => void,
         onManualSave: () => void,
         dslMode: "bottom" | "sidebar" = "bottom",
         clickBgOpensDsl = false,
@@ -123,6 +129,7 @@ export class SvgGraphEditor {
         this.gates = initialGates;
         this.wires = initialWires;
         this.groups = initialGroups;
+        this.floatingLabels = initialFloatingLabels;
         this.simulator = new CircuitSimulator(this.gates, this.wires);
         this.simulator.propagate();
         this.onSave = onSave;
@@ -239,7 +246,8 @@ export class SvgGraphEditor {
             currentViewport,
             this.gates,
             this.wires,
-            this.groups
+            this.groups,
+            this.floatingLabels
         );
 
         if (forceFileWrite) {
@@ -273,10 +281,10 @@ export class SvgGraphEditor {
 
     private pushHistory() {
         this.history.push({
-            nodes:  JSON.parse(JSON.stringify(this.nodes)),
-            edges:  JSON.parse(JSON.stringify(this.edges)),
-            gates:  JSON.parse(JSON.stringify(this.gates)),
-            wires:  JSON.parse(JSON.stringify(this.wires)),
+            nodes: JSON.parse(JSON.stringify(this.nodes)),
+            edges: JSON.parse(JSON.stringify(this.edges)),
+            gates: JSON.parse(JSON.stringify(this.gates)),
+            wires: JSON.parse(JSON.stringify(this.wires)),
             groups: JSON.parse(JSON.stringify(this.groups)),
         });
         if (this.history.length > this.MAX_HISTORY)
@@ -287,10 +295,10 @@ export class SvgGraphEditor {
     public undo() {
         if (this.history.length === 0) return;
         const snap = this.history.pop()!;
-        this.nodes  = snap.nodes;
-        this.edges  = snap.edges;
-        this.gates  = snap.gates;
-        this.wires  = snap.wires;
+        this.nodes = snap.nodes;
+        this.edges = snap.edges;
+        this.gates = snap.gates;
+        this.wires = snap.wires;
         this.groups = snap.groups;
         this.simulator.rebuild(this.gates, this.wires);
         this.simulator.propagate();
@@ -307,7 +315,7 @@ export class SvgGraphEditor {
         const canUndo = this.history.length > 0;
         this.undoBtn.disabled = !canUndo;
         this.undoBtn.style.opacity = canUndo ? "1" : "0.35";
-        this.undoBtn.style.cursor  = canUndo ? "pointer" : "default";
+        this.undoBtn.style.cursor = canUndo ? "pointer" : "default";
     }
 
     // ─── TOOLBAR ────────────────────────────────────────────────────────────────
@@ -343,21 +351,21 @@ export class SvgGraphEditor {
         this.updateUndoButton();
         sep();
         // ── Align ──
-        btn("Align left edges",         I('<rect x="1" y="2" width="2" height="12"/><rect x="3" y="4" width="8" height="3" rx="1"/><rect x="3" y="9" width="11" height="3" rx="1"/>'), () => this.alignSelection("left"));
-        btn("Align centers horizontally",I('<rect x="7" y="1" width="2" height="14"/><rect x="3" y="4" width="10" height="3" rx="1"/><rect x="4" y="9" width="8" height="3" rx="1"/>'), () => this.alignSelection("centerH"));
-        btn("Align right edges",         I('<rect x="13" y="2" width="2" height="12"/><rect x="5" y="4" width="8" height="3" rx="1"/><rect x="2" y="9" width="11" height="3" rx="1"/>'), () => this.alignSelection("right"));
+        btn("Align left edges", I('<rect x="1" y="2" width="2" height="12"/><rect x="3" y="4" width="8" height="3" rx="1"/><rect x="3" y="9" width="11" height="3" rx="1"/>'), () => this.alignSelection("left"));
+        btn("Align centers horizontally", I('<rect x="7" y="1" width="2" height="14"/><rect x="3" y="4" width="10" height="3" rx="1"/><rect x="4" y="9" width="8" height="3" rx="1"/>'), () => this.alignSelection("centerH"));
+        btn("Align right edges", I('<rect x="13" y="2" width="2" height="12"/><rect x="5" y="4" width="8" height="3" rx="1"/><rect x="2" y="9" width="11" height="3" rx="1"/>'), () => this.alignSelection("right"));
         sep();
-        btn("Align top edges",           I('<rect x="2" y="1" width="12" height="2"/><rect x="4" y="3" width="3" height="8" rx="1"/><rect x="9" y="3" width="3" height="11" rx="1"/>'), () => this.alignSelection("top"));
-        btn("Align middles vertically",  I('<rect x="1" y="7" width="14" height="2"/><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="4" width="3" height="8" rx="1"/>'), () => this.alignSelection("centerV"));
-        btn("Align bottom edges",        I('<rect x="2" y="13" width="12" height="2"/><rect x="4" y="5" width="3" height="8" rx="1"/><rect x="9" y="2" width="3" height="11" rx="1"/>'), () => this.alignSelection("bottom"));
+        btn("Align top edges", I('<rect x="2" y="1" width="12" height="2"/><rect x="4" y="3" width="3" height="8" rx="1"/><rect x="9" y="3" width="3" height="11" rx="1"/>'), () => this.alignSelection("top"));
+        btn("Align middles vertically", I('<rect x="1" y="7" width="14" height="2"/><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="4" width="3" height="8" rx="1"/>'), () => this.alignSelection("centerV"));
+        btn("Align bottom edges", I('<rect x="2" y="13" width="12" height="2"/><rect x="4" y="5" width="3" height="8" rx="1"/><rect x="9" y="2" width="3" height="11" rx="1"/>'), () => this.alignSelection("bottom"));
         sep();
         // ── Distribute ──
-        btn("Distribute horizontally",   I('<rect x="1" y="2" width="2" height="12"/><rect x="13" y="2" width="2" height="12"/><rect x="5" y="5" width="6" height="6" rx="1"/>'), () => this.distributeSelection("horizontal"));
-        btn("Distribute vertically",     I('<rect x="2" y="1" width="12" height="2"/><rect x="2" y="13" width="12" height="2"/><rect x="5" y="5" width="6" height="6" rx="1"/>'), () => this.distributeSelection("vertical"));
+        btn("Distribute horizontally", I('<rect x="1" y="2" width="2" height="12"/><rect x="13" y="2" width="2" height="12"/><rect x="5" y="5" width="6" height="6" rx="1"/>'), () => this.distributeSelection("horizontal"));
+        btn("Distribute vertically", I('<rect x="2" y="1" width="12" height="2"/><rect x="2" y="13" width="12" height="2"/><rect x="5" y="5" width="6" height="6" rx="1"/>'), () => this.distributeSelection("vertical"));
         sep();
         // ── View ──
-        btn("Fit view to content",       I('<path d="M1 1h5v2H3v3H1V1zm9 0h5v5h-2V3h-3V1zM1 10h2v3h3v2H1v-5zm12 3h-3v2h5v-5h-2v3z"/>'), () => { this.fitViewToContent(); });
-        btn("Select all",                I('<rect x="2" y="2" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>'), () => this.selectAll());
+        btn("Fit view to content", I('<path d="M1 1h5v2H3v3H1V1zm9 0h5v5h-2V3h-3V1zM1 10h2v3h3v2H1v-5zm12 3h-3v2h5v-5h-2v3z"/>'), () => { this.fitViewToContent(); });
+        btn("Select all", I('<rect x="2" y="2" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>'), () => this.selectAll());
         sep();
         // ── DSL editor toggle ──
         btn("Toggle DSL editor (Ctrl+Shift+G)", I('<rect x="1" y="2" width="14" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.3"/><line x1="3" y1="9" x2="8" y2="9" stroke="currentColor" stroke-width="1.3"/>'), () => this.toggleWritingMode());
@@ -442,12 +450,12 @@ export class SvgGraphEditor {
             const target = node || gate;
             if (!target) continue;
             switch (axis) {
-                case "left":     target.position = { ...target.position, x: minX }; break;
-                case "centerH":  target.position = { ...target.position, x: (minX + maxX) / 2 }; break;
-                case "right":    target.position = { ...target.position, x: maxX }; break;
-                case "top":      target.position = { ...target.position, y: minY }; break;
-                case "centerV":  target.position = { ...target.position, y: (minY + maxY) / 2 }; break;
-                case "bottom":   target.position = { ...target.position, y: maxY }; break;
+                case "left": target.position = { ...target.position, x: minX }; break;
+                case "centerH": target.position = { ...target.position, x: (minX + maxX) / 2 }; break;
+                case "right": target.position = { ...target.position, x: maxX }; break;
+                case "top": target.position = { ...target.position, y: minY }; break;
+                case "centerV": target.position = { ...target.position, y: (minY + maxY) / 2 }; break;
+                case "bottom": target.position = { ...target.position, y: maxY }; break;
             }
         }
         this.updatePositions();
@@ -860,15 +868,18 @@ export class SvgGraphEditor {
             g.appendChild(labelBg);
 
             // Label text
-            const labelEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            labelEl.setAttribute("font-size", "12");
-            labelEl.setAttribute("font-weight", "600");
-            labelEl.setAttribute("font-family", "var(--font-sans, sans-serif)");
-            labelEl.setAttribute("fill", "var(--text-normal)");
-            labelEl.setAttribute("dominant-baseline", "central");
-            labelEl.setAttribute("pointer-events", "none");
-            labelEl.textContent = group.label || "Frame";
-            g.appendChild(labelEl);
+            const labelFo = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+            labelFo.dataset.groupLabelId = group.id;
+            labelFo.setAttribute("x", (group.x + 8).toString());
+            labelFo.setAttribute("y", (group.y - 24).toString());
+            labelFo.setAttribute("width", "1");
+            labelFo.setAttribute("height", "1");
+            labelFo.style.overflow = "visible";
+            labelFo.style.pointerEvents = "none";
+
+            const labelContent = this.createLabelContent(group.label || "Frame", this.theme.text!);
+            labelFo.appendChild(labelContent);
+            g.appendChild(labelFo);
 
             // Resize grip
             const grip = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -1011,7 +1022,7 @@ export class SvgGraphEditor {
             foreignObjNode.setAttribute("width", "1");
             foreignObjNode.setAttribute("height", "1");
             foreignObjNode.style.overflow = "visible";
-            
+
             const labelContent = this.createLabelContent(node.label, this.theme.text!);
             foreignObjNode.appendChild(labelContent);
             group.appendChild(foreignObjNode);
@@ -1022,24 +1033,24 @@ export class SvgGraphEditor {
                 const ro = new ResizeObserver((entries) => {
                     for (const entry of entries) {
                         const { width, height } = entry.contentRect;
-                        
+
                         // Use Pythagorean theorem to find the diagonal distance, plus some comfortable padding
                         const newR = Math.max(25, Math.ceil(Math.sqrt((width / 2) ** 2 + (height / 2) ** 2)) + 6);
-                        
+
                         if (node.radius !== newR) {
                             node.radius = newR;
                             circle.setAttribute("r", String(newR));
-                            
+
                             if (inner) {
                                 inner.setAttribute("r", String(newR - 5));
                             }
-                            
+
                             if (startArrow) {
                                 const tip = -newR;
                                 const base = -(newR + 20);
                                 startArrow.setAttribute("d", `M ${base} 0 L ${tip} 0 M ${tip - 5} -5 L ${tip} 0 L ${tip - 5} 5`);
                             }
-                            
+
                             // Instantly update incoming/outgoing edges so they connect perfectly to the new boundary!
                             this.updatePositions();
                         }
@@ -1067,6 +1078,39 @@ export class SvgGraphEditor {
             this.nodeElements.set(node.id, group);
         });
 
+        // --- Floating Labels ---
+        this.floatingLabelElements.clear();
+        this.floatingLabels.forEach(lbl => {
+            const fo = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+            fo.dataset.labelId = lbl.id;
+            fo.style.cursor = "move";
+            fo.style.overflow = "visible";
+
+            const div = document.createElement("div");
+            div.style.cssText = `
+                font-size: ${lbl.fontSize ?? 14}px;
+                font-family: var(--font-sans, sans-serif);
+                color: var(--text-normal);
+                background: var(--background-primary);
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                padding: 4px 8px;
+                white-space: pre-wrap;
+                word-break: break-word;
+                min-width: 40px;
+                min-height: 20px;
+                width: ${lbl.width ?? 160}px;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+                user-select: none;
+                pointer-events: none;
+            `;
+            div.textContent = lbl.text || "Label";
+
+            fo.appendChild(div);
+            this.svg.appendChild(fo);
+            this.floatingLabelElements.set(lbl.id, fo);
+        });
+
         // Link button lives on top of everything
         this.buildLinkButton();
         finishRenderMath();
@@ -1075,7 +1119,6 @@ export class SvgGraphEditor {
 
     // ─── POSITIONS ──────────────────────────────────────────────────────────────
 
-
     private updateGroupPositions() {
         this.groups.forEach(group => {
             const g = this.groupElements.get(group.id);
@@ -1083,7 +1126,7 @@ export class SvgGraphEditor {
 
             const rect = g.querySelector("rect[data-group-drag-id]") as SVGRectElement;
             const labelBg = g.querySelectorAll("rect")[1] as SVGRectElement;
-            const labelEl = g.querySelector("text") as SVGTextElement;
+            const labelFo = g.querySelector("foreignObject[data-group-label-id]") as SVGForeignObjectElement;
             const grip = g.querySelector("g[data-group-resize-id]") as SVGGElement;
 
             if (rect) {
@@ -1099,9 +1142,11 @@ export class SvgGraphEditor {
                 labelBg.setAttribute("y", (group.y - 24).toString()); // Position above the frame
                 labelBg.setAttribute("width", textWidth.toString());
             }
-            if (labelEl) {
-                labelEl.setAttribute("x", (group.x + 8).toString());
-                labelEl.setAttribute("y", (group.y - 13).toString());
+            if (labelFo) {
+                labelFo.setAttribute("x", (group.x + 8).toString());
+                labelFo.setAttribute("y", (group.y - 24).toString());
+                labelFo.setAttribute("width", textWidth.toString());
+                labelFo.setAttribute("height", "24");
             }
 
             // Resize grip: 3 diagonal lines at bottom-right corner
@@ -1145,7 +1190,26 @@ export class SvgGraphEditor {
                 });
             }
         });
+
+        this.updateFloatingLabelPositions();
         this.updateGroupPositions();
+    }
+
+    private updateFloatingLabelPositions() {
+        this.floatingLabels.forEach(lbl => {
+            const fo = this.floatingLabelElements.get(lbl.id);
+            if (!fo) return;
+            const w = lbl.width ?? 160;
+            const div = fo.querySelector("div") as HTMLDivElement;
+            // Measure height from content
+            const lineCount = (lbl.text || "Label").split("\n").length;
+            const h = Math.max(28, lineCount * (lbl.fontSize ?? 14) * 1.5 + 12);
+            fo.setAttribute("x", lbl.x.toString());
+            fo.setAttribute("y", lbl.y.toString());
+            fo.setAttribute("width", w.toString());
+            fo.setAttribute("height", h.toString());
+            if (div) div.style.width = `${w}px`;
+        });
     }
 
     // ─── MOUSE HELPERS ──────────────────────────────────────────────────────────
@@ -1569,11 +1633,36 @@ export class SvgGraphEditor {
                         }
                     }
 
+                    // FLOATING LABEL SECTION
+                    const labelCtx = target.closest("[data-label-id]") as SVGForeignObjectElement;
+                    if (labelCtx?.dataset.labelId) {
+                        const lbl = this.floatingLabels.find(l => l.id === labelCtx.dataset.labelId);
+                        if (lbl) {
+                            this.addMenuItem("Delete label", () => {
+                                this.floatingLabels = this.floatingLabels.filter(l => l.id !== lbl.id);
+                                this.buildDOM(); this.updatePositions(); this.triggerSave();
+                            }, "danger");
+                        }
+                    }
+
                     // CANVAS SECTION
                     this.addMenuItem("Add state here", () => {
                         const mp = this.getMousePosition(evt);
                         const newId = `q${this.nodes.length}`;
                         this.nodes.push({ id: newId, position: { x: mp.x, y: mp.y }, label: newId });
+                        this.buildDOM();
+                        this.updatePositions();
+                        this.triggerSave();
+                    });
+                    this.addMenuItem("Add label here", () => {
+                        const mp = this.getMousePosition(evt);
+                        this.floatingLabels.push({
+                            id: `lbl_${Date.now()}`,
+                            x: mp.x,
+                            y: mp.y,
+                            text: "Label",
+                            width: 160,
+                        });
                         this.buildDOM();
                         this.updatePositions();
                         this.triggerSave();
@@ -1663,38 +1752,37 @@ export class SvgGraphEditor {
             }
 
             // Double-click on group label area → rename
-            const groupDblEl = target.closest("[data-group-drag-id]") as SVGElement;
-            if (groupDblEl?.dataset?.groupDragId) {
-                const grp = this.groups.find(g => g.id === (groupDblEl as unknown as HTMLElement).dataset.groupDragId);
+            const groupEl = target.closest("g[data-group-id]") as SVGGElement;
+            if (groupEl?.dataset.groupId) {
+                const grp = this.groups.find(g => g.id === groupEl.dataset.groupId);
                 if (grp) {
+                    const labelText = grp.label || "Frame";
                     const input = document.createElement("input");
                     input.type = "text";
-                    input.value = grp.label || "";
-                    input.placeholder = "Frame label";
+                    input.value = labelText;
                     input.addClass("automaton-inline-editor");
-                    input.style.left = `${evt.offsetX}px`;
-                    input.style.top = `${evt.offsetY}px`;
-                    this.container.appendChild(input);
-                    input.focus();
-                    input.select();
-                    this.autocomplete = new DslAutocomplete(input);
+                    // Position near the label pill (top-left of group)
+                    const svgPt = this.svgToScreen({ x: grp.x, y: grp.y - 24 });
+                    const svgRect = this.svgWrapper.getBoundingClientRect();
+                    input.style.left = `${svgPt.x - svgRect.left}px`;
+                    input.style.top = `${svgPt.y - svgRect.top}px`;
+                    this.svgWrapper.appendChild(input);
+                    input.focus(); input.select();
+
                     let saved = false;
                     const save = () => {
                         if (saved) return;
                         saved = true;
                         grp.label = input.value;
                         input.remove();
-                        this.updateGroupPositions();
+                        this.buildDOM();
+                        this.updatePositions();
                         this.triggerSave();
                     };
                     input.addEventListener("blur", save);
-                    input.addEventListener("keydown", (e) => {
+                    input.addEventListener("keydown", e => {
                         if (e.key === "Enter") save();
-                        if (e.key === "Escape") {
-                            saved = true;
-                            this.autocomplete?.destroy();
-                            input.remove();
-                        }
+                        if (e.key === "Escape") { saved = true; input.remove(); }
                     });
                     return;
                 }
@@ -1741,6 +1829,59 @@ export class SvgGraphEditor {
                 this.updatePositions();
                 this.triggerSave();
             };
+
+            // Floating label edit (double-click on label itself, not node/edge)
+            const labelEl = target.closest("[data-label-id]") as SVGForeignObjectElement;
+            if (labelEl?.dataset.labelId) {
+                const lbl = this.floatingLabels.find(l => l.id === labelEl.dataset.labelId);
+                if (!lbl) return;
+
+                const fo = this.floatingLabelElements.get(lbl.id)!;
+                const foRect = fo.getBoundingClientRect();
+                const svgRect = this.svgWrapper.getBoundingClientRect();
+
+                const ta = document.createElement("textarea");
+                ta.value = lbl.text;
+                ta.style.cssText = `
+                    position: absolute;
+                    left: ${foRect.left - svgRect.left}px;
+                    top: ${foRect.top - svgRect.top}px;
+                    width: ${lbl.width ?? 160}px;
+                    min-height: 60px;
+                    font-size: ${lbl.fontSize ?? 14}px;
+                    font-family: var(--font-sans, sans-serif);
+                    color: var(--text-normal);
+                    background: var(--background-primary);
+                    border: 2px solid var(--interactive-accent);
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                    resize: both;
+                    z-index: 100;
+                    box-sizing: border-box;
+                `;
+                this.svgWrapper.appendChild(ta);
+                ta.focus();
+
+                let saved = false;
+                const save = () => {
+                    if (saved) return;
+                    saved = true;
+                    lbl.text = ta.value;
+                    // Update width if user resized
+                    lbl.width = ta.offsetWidth;
+                    ta.remove();
+                    this.buildDOM();
+                    this.updatePositions();
+                    this.triggerSave();
+                };
+                ta.addEventListener("blur", save);
+                ta.addEventListener("keydown", e => {
+                    if (e.key === "Escape") { saved = true; ta.remove(); }
+                    // Shift+Enter = newline (natural), Enter alone = save
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
+                });
+                return;
+            }
 
             input.addEventListener("blur", save);
             input.addEventListener("keydown", (e) => {
@@ -1801,7 +1942,7 @@ export class SvgGraphEditor {
                     const mp = this.getMousePosition(evt);
                     this.dragOffset = { x: mp.x - grp.x, y: mp.y - grp.y };
                     this.draggedGroup = grp;
-                    
+
                     // FIX: Only "scoop up" the children if Shift is NOT pressed!
                     if (!evt.shiftKey) {
                         const isInside = (p: Position) => p.x >= grp.x && p.x <= grp.x + grp.w && p.y >= grp.y && p.y <= grp.y + grp.h;
@@ -1938,6 +2079,21 @@ export class SvgGraphEditor {
                 }
             }
 
+            // Floating label drag
+            const labelEl = target.closest("[data-label-id]") as SVGForeignObjectElement;
+            if (labelEl?.dataset.labelId) {
+                const lbl = this.floatingLabels.find(l => l.id === labelEl.dataset.labelId);
+                if (lbl) {
+                    this.cachedCTM = this.svg.getScreenCTM();
+                    const mp = this.getMousePosition(evt);
+                    this.dragOffset = { x: mp.x - lbl.x, y: mp.y - lbl.y };
+                    this.draggedFloatingLabel = lbl;
+                    this.dragStartPos = { x: evt.clientX, y: evt.clientY };
+                    this.hasMovedEnough = false;
+                    return;
+                }
+            }
+
             // Cancel wiring on background click
             if (this.wiringFrom && !portEl && !gateGroup) {
                 this.cancelWiring();
@@ -2001,7 +2157,7 @@ export class SvgGraphEditor {
                 if (this.draggedGroupChildren) {
                     this.draggedGroupChildren.nodes.forEach(n => { n.position.x += dx; n.position.y += dy; });
                     this.draggedGroupChildren.gates.forEach(g => { g.position.x += dx; g.position.y += dy; });
-                    
+
                     // Also move waypoints of edges/wires that are completely contained within the frame
                     this.edges.forEach(e => {
                         if (e.waypoints && this.draggedGroupChildren!.nodes.some(n => n.id === e.source) && this.draggedGroupChildren!.nodes.some(n => n.id === e.target)) {
@@ -2085,6 +2241,13 @@ export class SvgGraphEditor {
                 this.wiringPreviewLine.setAttribute("x2", mp.x.toString());
                 this.wiringPreviewLine.setAttribute("y2", mp.y.toString());
             }
+
+            // Floating label dragging
+            if (this.draggedFloatingLabel) {
+                this.draggedFloatingLabel.x = mp.x - this.dragOffset.x;
+                this.draggedFloatingLabel.y = mp.y - this.dragOffset.y;
+                this.updateFloatingLabelPositions();
+            }
         });
 
         // ── MOUSE UP / LEAVE ──
@@ -2127,12 +2290,25 @@ export class SvgGraphEditor {
                 this.draggedGate = null;
                 this.triggerSave(false);
             }
+            if (this.draggedFloatingLabel) {
+                this.draggedFloatingLabel = null;
+                this.triggerSave(false);
+            }
         };
 
         this.svg.addEventListener("mouseup", endDrag);
         this.svg.addEventListener("mouseleave", endDrag);
 
         this.triggerSave(false);
+    }
+
+    private svgToScreen(pt: Position): Position {
+        const ctm = this.svg.getScreenCTM();
+        if (!ctm) return pt;
+        const svgPt = this.svg.createSVGPoint();
+        svgPt.x = pt.x; svgPt.y = pt.y;
+        const transformed = svgPt.matrixTransform(ctm);
+        return { x: transformed.x, y: transformed.y };
     }
 
     // ─── DOT IMPORT ─────────────────────────────────────────────────────────────
@@ -2336,7 +2512,7 @@ export class SvgGraphEditor {
 
             const outputActive = this.simulator.getGateValue(gate.id);
             const isIO = gate.type === "INPUT" || gate.type === "OUTPUT";
-            
+
             let gateFill = standardFill;
             let gateStroke = standardStroke;
             let labelFill = standardText;
@@ -2398,7 +2574,7 @@ export class SvgGraphEditor {
                 const portName = portEl.dataset.gatePort ?? "";
                 const isOut = portName === "out";
                 const portActive = isOut ? outputActive : this.simulator.getPortValue(gate.id, portName);
-                
+
                 const pFill = portActive ? activeColor : standardFill;
                 const pStroke = portActive ? activeColor : standardStroke;
 
@@ -2472,11 +2648,11 @@ export class SvgGraphEditor {
             pathEl.setAttribute("d", wirePath);
 
             const wireActive = this.simulator.getWireValue(wire);
-            
+
             // Apply theme colors and animation to active wires
             pathEl.setAttribute("stroke", wireActive ? activeColor : (this.theme.edgeStroke || "var(--text-muted)"));
             pathEl.setAttribute("stroke-width", wireActive ? "2.5" : "2");
-            
+
             if (wireActive) {
                 pathEl.classList.add("automaton-wire-active");
                 // The drop shadow now perfectly matches whatever theme color is active
@@ -2531,7 +2707,7 @@ export class SvgGraphEditor {
             case 'NOR':
                 return { body: `M ${-hw} ${-hh} C ${0} ${-hh} ${hw - 6} ${-hh * 0.5} ${hw - 6} ${0} C ${hw - 6} ${hh * 0.5} ${0} ${hh} ${-hw} ${hh} C ${-hw * 0.4} ${hh * 0.5} ${-hw * 0.4} ${-hh * 0.5} ${-hw} ${-hh} Z M ${hw - 1} 0 m -5 0 a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0` };
             case 'XOR':
-                return { 
+                return {
                     body: `M ${-hw + 4} ${-hh} C ${0} ${-hh} ${hw} ${-hh * 0.5} ${hw} ${0} C ${hw} ${hh * 0.5} ${0} ${hh} ${-hw + 4} ${hh} C ${-hw * 0.4 + 4} ${hh * 0.5} ${-hw * 0.4 + 4} ${-hh * 0.5} ${-hw + 4} ${-hh} Z`,
                     lines: `M ${-hw} ${-hh} C ${-hw * 0.4} ${-hh * 0.5} ${-hw * 0.4} ${hh * 0.5} ${-hw} ${hh}`
                 };
@@ -2754,7 +2930,7 @@ export class SvgGraphEditor {
         this.applyParserOutput(parseDSL(this.writingTextarea.value, { straightWires: this.straightWires }));
     }
 
-    
+
     public applyParserOutput(output: ParserOutput) {
         const layout = (output as any).layout as { rows: string[][], columns: string[][] } | undefined;
         const explicitIds = new Set<string>([
